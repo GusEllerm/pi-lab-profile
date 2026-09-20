@@ -28,7 +28,31 @@ type Item = {
 	lines: number;
 	suggestedName: string;
 	isError?: boolean;
+	/** The message this belongs to — "it was when I asked about X" is how you remember it. */
+	prompt: string;
+	at?: number;
 };
+
+/** A line in the picker: either a heading for one of your messages, or something to open. */
+type Row = { kind: "group"; prompt: string; at?: number } | { kind: "item"; item: Item };
+
+const ago = (at?: number): string => {
+	if (!at) return "";
+	const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+	if (s < 60) return `${s}s ago`;
+	if (s < 3600) return `${Math.round(s / 60)}m ago`;
+	return `${Math.round(s / 3600)}h ago`;
+};
+
+/**
+ * Reasoning blocks nearly all open the same way ("We need to…"), so the first 60 characters make a
+ * useless label. Prefer the first line with something specific in it.
+ */
+function preview(text: string, n: number): string {
+	const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+	const meaty = lines.find((l) => l.length > 25 && !/^(we need to|let'?s|okay|now|first,? )/i.test(l)) ?? lines[0] ?? "";
+	return oneLine(meaty, n);
+}
 
 /** A file name that gives the editor a fighting chance at syntax highlighting. */
 function nameFor(kind: string, tool: string | undefined, args: Record<string, unknown> | undefined, n: number): string {
@@ -46,14 +70,22 @@ const oneLine = (s: string, n: number) => {
 	return flat.length > n ? `${flat.slice(0, n - 1)}…` : flat;
 };
 
-/** Walk the session and collect everything worth re-reading, newest last. */
+/** Walk the session and collect everything worth re-reading, tagged with the message it followed. */
 function collect(ctx: ExtensionContext): Item[] {
 	const items: Item[] = [];
 	const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
+	let prompt = "(before your first message)";
 	let n = 0;
-	for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: string; message?: any }[]) {
+	for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: string; message?: any; timestamp?: string }[]) {
 		const m = entry?.message;
 		if (entry?.type !== "message" || !m) continue;
+		const at = entry.timestamp ? Date.parse(entry.timestamp) : undefined;
+
+		if (m.role === "user") {
+			const text = typeof m.content === "string" ? m.content : ((m.content ?? []) as any[]).filter((c) => c?.type === "text").map((c) => c.text).join(" ");
+			if (text?.trim() && !text.trim().startsWith("/")) prompt = oneLine(text.trim(), 70);
+			continue;
+		}
 
 		if (m.role === "assistant") {
 			for (const part of (m.content ?? []) as any[]) {
@@ -63,10 +95,12 @@ function collect(ctx: ExtensionContext): Item[] {
 					items.push({
 						kind: "thinking",
 						label: "reasoning",
-						detail: oneLine(text, 60),
+						detail: preview(text, 60),
 						text,
 						lines: text.split("\n").length,
 						suggestedName: nameFor("thinking", undefined, undefined, ++n),
+						prompt,
+						at,
 					});
 				}
 			}
@@ -84,6 +118,8 @@ function collect(ctx: ExtensionContext): Item[] {
 				lines: text.split("\n").length,
 				suggestedName: `${String(++n).padStart(2, "0")}-bash.txt`,
 				isError: typeof m.exitCode === "number" && m.exitCode !== 0,
+				prompt,
+				at,
 			});
 			continue;
 		}
@@ -96,15 +132,155 @@ function collect(ctx: ExtensionContext): Item[] {
 			items.push({
 				kind: "tool",
 				label: tool,
-				detail: oneLine(call?.args ? JSON.stringify(call.args) : text, 60),
+				detail: call?.args ? oneLine(Object.values(call.args).map(String).join(" "), 60) : preview(text, 60),
 				text,
 				lines: text.split("\n").length,
 				suggestedName: nameFor("tool", tool, call?.args, ++n),
 				isError: Boolean(m.isError),
+				prompt,
+				at,
 			});
 		}
 	}
 	return items;
+}
+
+/** Group newest-first, each of your messages heading the things that came after it. */
+function rowsFor(items: Item[]): Row[] {
+	const rows: Row[] = [];
+	let current: string | undefined;
+	for (const item of [...items].reverse()) {
+		if (item.prompt !== current) {
+			current = item.prompt;
+			rows.push({ kind: "group", prompt: item.prompt, at: item.at });
+		}
+		rows.push({ kind: "item", item });
+	}
+	return rows;
+}
+
+/**
+ * The picker. Getting from "that reasoning block I just watched scroll past" to "this row in a
+ * list" is the hard part, so it does three things a flat list of labels cannot:
+ *   - groups entries under the message they followed, because that is how you remember them
+ *   - previews the highlighted entry on the right, so you confirm before you commit
+ *   - filters on the full text, so something you remember it *saying* will find it
+ */
+class Picker implements Component {
+	private rows: Row[] = [];
+	private cursor = 0; // index into this.rows, always on an item
+	private filter = "";
+	private top = 0; // first visible row, for scrolling the list
+
+	constructor(
+		private all: Item[],
+		private height: number,
+		private theme: Theme,
+		private close: (chosen?: Item) => void,
+	) {
+		this.rebuild();
+	}
+
+	private rebuild(): void {
+		const q = this.filter.toLowerCase();
+		const matched = q
+			? this.all.filter(
+					(i) =>
+						i.label.toLowerCase().includes(q) ||
+						i.detail.toLowerCase().includes(q) ||
+						i.prompt.toLowerCase().includes(q) ||
+						i.text.toLowerCase().includes(q), // what you remember it saying
+				)
+			: this.all;
+		this.rows = rowsFor(matched.slice(-MAX_ENTRIES));
+		this.cursor = this.rows.findIndex((r) => r.kind === "item");
+		this.top = 0;
+	}
+
+	private move(step: number): void {
+		for (let i = this.cursor + step; i >= 0 && i < this.rows.length; i += step) {
+			if (this.rows[i].kind === "item") {
+				this.cursor = i;
+				const listRows = this.height - 4;
+				if (i < this.top) this.top = i;
+				if (i >= this.top + listRows) this.top = i - listRows + 1;
+				return;
+			}
+		}
+	}
+
+	private current(): Item | undefined {
+		const row = this.rows[this.cursor];
+		return row?.kind === "item" ? row.item : undefined;
+	}
+
+	render(width: number): string[] {
+		const t = this.theme;
+		const inner = Math.max(30, width - 4);
+		const listW = Math.max(30, Math.min(64, Math.floor(inner * 0.42)));
+		const previewW = inner - listW - 3;
+		const item = this.current();
+		const previewLines = (item?.text ?? "").split("\n");
+
+		const pad = (s: string, w: number) => {
+			const cell = truncateToWidth(s, w, "…");
+			return cell + " ".repeat(Math.max(0, w - visibleWidth(cell)));
+		};
+
+		const body: string[] = [];
+		const listRows = this.height - 4;
+		for (let n = 0; n < listRows; n++) {
+			const rowIndex = this.top + n;
+			const row = this.rows[rowIndex];
+			let left: string;
+			if (!row) left = pad("", listW);
+			else if (row.kind === "group") {
+				const when = ago(row.at);
+				const head = truncateToWidth(`▸ ${row.prompt}`, Math.max(8, listW - visibleWidth(when) - 1), "…");
+				left = t.fg("accent", head) + " ".repeat(Math.max(1, listW - visibleWidth(head) - visibleWidth(when))) + t.fg("dim", when);
+			} else {
+				const selected = rowIndex === this.cursor;
+				const mark = row.item.isError ? "✗" : selected ? "→" : " ";
+				const size = `${row.item.lines}L`;
+				const text = `  ${mark} ${row.item.label.padEnd(9)} ${size.padStart(5)}  ${row.item.detail}`;
+				left = selected ? t.fg("text", pad(text, listW)) : t.fg("muted", pad(text, listW));
+			}
+			const right = pad(previewLines[n] ?? "", previewW);
+			body.push(`${left} ${t.fg("borderMuted", "│")} ${n < previewLines.length ? t.fg("muted", right) : right}`);
+		}
+
+		const title = item
+			? `open · ${item.label} · ${item.lines} line${item.lines === 1 ? "" : "s"} · ${item.lines > OPEN_IN_EDITOR_LINES ? "enter → editor" : "enter → pager"}`
+			: this.filter
+				? `open · nothing matches "${this.filter}"`
+				: "open · nothing to show";
+		const head = truncateToWidth(title, Math.max(8, width - 6), "…");
+		const out = [t.fg("borderAccent", "┌─") + t.fg("accent", ` ${head} `) + t.fg("borderAccent", `${"─".repeat(Math.max(0, width - visibleWidth(head) - 5))}┐`)];
+		for (const line of body) out.push(`${t.fg("borderAccent", "│ ")}${line}${t.fg("borderAccent", " │")}`);
+		const hint = this.filter ? `filter: ${this.filter}` : "type to filter · ↑↓ move · enter open · esc close";
+		out.push(`${t.fg("borderAccent", "│ ")}${pad(t.fg("dim", hint), inner)}${t.fg("borderAccent", " │")}`);
+		out.push(t.fg("borderAccent", `└${"─".repeat(Math.max(0, width - 2))}┘`));
+		return out;
+	}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, "escape")) return this.close();
+		if (matchesKey(data, "enter")) return this.close(this.current());
+		if (matchesKey(data, "down")) return this.move(1);
+		if (matchesKey(data, "up")) return this.move(-1);
+		if (matchesKey(data, "backspace")) {
+			this.filter = this.filter.slice(0, -1);
+			return this.rebuild();
+		}
+		if (data.length === 1 && data >= " " && data <= "~") {
+			this.filter += data;
+			this.rebuild();
+		}
+	}
+	handleMouse() {
+		return { handled: true };
+	}
+	invalidate(): void {}
 }
 
 class Pager implements Component {
@@ -192,17 +368,21 @@ export default function (pi: ExtensionAPI): void {
 			if (!items.length) return ctx.ui.notify("Nothing to open yet — no tool results or reasoning in this session.", "info");
 
 			const arg = args.trim().toLowerCase();
-			const filtered = arg ? items.filter((i) => i.label.toLowerCase().includes(arg) || i.detail.toLowerCase().includes(arg)) : items;
+			const filtered = arg
+				? items.filter(
+						(i) =>
+							i.label.toLowerCase().includes(arg) ||
+							i.detail.toLowerCase().includes(arg) ||
+							i.prompt.toLowerCase().includes(arg) ||
+							i.text.toLowerCase().includes(arg),
+					)
+				: items;
 			if (!filtered.length) return ctx.ui.notify(`Nothing matching "${arg}".`, "warning");
 
-			const recent = filtered.slice(-MAX_ENTRIES).reverse(); // newest first: what you just saw is what you want
-			const labels = recent.map((i) => {
-				const size = `${i.lines} line${i.lines === 1 ? "" : "s"}`;
-				const where = i.lines > OPEN_IN_EDITOR_LINES ? "editor" : "pager";
-				return `${(i.isError ? "✗ " : "  ") + i.label.padEnd(10)} ${size.padStart(9)}  ${where.padEnd(6)}  ${i.detail}`;
-			});
-			const choice = await ctx.ui.select("Open which output?", labels);
-			const picked = choice ? recent[labels.indexOf(choice)] : undefined;
+			const picked = await ctx.ui.custom<Item | undefined>((tui, theme, _kb, done) => {
+				const rows = Math.max(12, Math.min(30, (tui.terminal?.rows ?? 40) - 10));
+				return new Picker(filtered, rows, theme, done);
+			}, {});
 			if (picked) await show(ctx, picked);
 		},
 	});
