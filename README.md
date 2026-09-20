@@ -108,3 +108,26 @@ any edit, and after any Pi upgrade; CI runs the parse half on every push.
 ## License
 
 MIT.
+
+## Developing it
+
+The author's own machine runs the profile *from this working tree*, so there is one copy of
+everything and no sync step:
+
+```bash
+pi install ~/Projects/pi-lab-profile          # extensions load from the tree, not a copy
+rm ~/.pi/agent/extensions/{statusbar,fleet,rounds,endpoints,code-panels,image-window}.ts
+ln -sf "$PWD"/agents/{dev,reviewer,critic}.md ~/.pi/agent/agents/
+ln -sf "$PWD"/profiles/lab/rounds.json ~/.pi/agent/rounds.json
+```
+
+Edit → `scripts/check.sh` → `/reload` → it is live. Commit and push to publish.
+
+The catch is that a broken edit breaks your running Pi, because there is no staging copy — so run
+the guard *before* reloading, not after. To check what a stranger actually gets, install the
+published package into a throwaway agent dir instead of your own:
+
+```bash
+PI_CODING_AGENT_DIR=/tmp/pi-clean pi install git:github.com/GusEllerm/pi-lab-profile
+PI_CODING_AGENT_DIR=/tmp/pi-clean pi
+```
