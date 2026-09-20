@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# alcf-token — print a valid ALCF inference-gateway access token (Globus bearer).
+#
+#   alcf-token            # token on stdout (cached), for pi's models.json: "apiKey": "!~/.local/bin/alcf-token"
+#   alcf-token --refresh  # ignore the cache; allows 90 s (first run downloads alcf-ai)
+#   alcf-token --status   # login/cache state, never prints the token
+#
+# pi runs this before EVERY request to the alcf provider, gives it 10 s, and
+# discards stderr — so it must be fast and must never prompt. Hence:
+#   * a 10-minute cache (0600) in front of `alcf-ai auth get-access-token`,
+#     which itself refreshes from the stored refresh token (valid ~6 months idle);
+#   * an 8 s cap on that call, stdin closed so a re-login can't block;
+#   * on failure, fall back to a cached token up to 1 h old, else exit 1;
+#   * the reason for any failure goes to $STATE/last-error (read by /endpoints).
+#
+# First-time / expired login is interactive and is the user's job:
+#   uvx --from "alcf-ai==0.10.0" alcf-ai auth login
+
+set -uo pipefail
+
+SPEC=${ALCF_AI_SPEC:-alcf-ai==0.10.0}
+TTL=${ALCF_TOKEN_TTL:-600}          # seconds a cached token is served without refreshing
+STALE_OK=${ALCF_TOKEN_STALE_OK:-3600}
+LIMIT=8
+[ "${1:-}" = "--refresh" ] && LIMIT=90
+STATE="${XDG_CACHE_HOME:-$HOME/.cache}/alcf-token"
+CACHE="$STATE/token"
+ERR="$STATE/last-error"
+TOKENS_JSON="$HOME/.globus/app/58fdd3bc-e1c3-4ce5-80ea-8d6b87cfb944/inference_app/tokens.json"
+
+UVX=$(command -v uvx || echo "$HOME/.local/bin/uvx")
+umask 077
+mkdir -p "$STATE"
+
+age() { [ -f "$1" ] && echo $(( $(date +%s) - $(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1") )) || echo 999999; }
+fail() { printf '%s %s\n' "$(date '+%F %T')" "$*" > "$ERR"; echo "alcf-token: $*" >&2; }
+
+if [ "${1:-}" = "--status" ]; then
+    [ -f "$TOKENS_JSON" ] && echo "login: stored credentials present ($TOKENS_JSON)" \
+                          || echo "login: none — run: uvx --from \"$SPEC\" alcf-ai auth login"
+    [ -f "$CACHE" ] && echo "cache: token cached $(age "$CACHE")s ago (TTL ${TTL}s)" || echo "cache: empty"
+    [ -f "$ERR" ] && echo "last error: $(cat "$ERR")"
+    exit 0
+fi
+
+if [ "${1:-}" != "--refresh" ] && [ -s "$CACHE" ] && [ "$(age "$CACHE")" -lt "$TTL" ]; then
+    cat "$CACHE"; exit 0
+fi
+
+if [ -n "${ALCF_TOKEN_OFFLINE:-}" ]; then   # cache-only mode (tests): never runs alcf-ai
+    fail "offline mode and no fresh cached token"
+    exit 1
+fi
+
+if [ ! -f "$TOKENS_JSON" ]; then
+    fail "not logged in to ALCF — run: uvx --from \"$SPEC\" alcf-ai auth login"
+    exit 1
+fi
+
+# perl alarm = portable timeout (macOS has no coreutils timeout by default)
+tok=$(perl -e 'alarm shift; exec @ARGV' "$LIMIT" "$UVX" --quiet --from "$SPEC" alcf-ai auth get-access-token </dev/null 2>"$STATE/uvx.stderr" | tr -d '[:space:]')
+
+if [ -n "$tok" ] && [ "${#tok}" -gt 20 ]; then
+    printf '%s' "$tok" > "$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
+    rm -f "$ERR"
+    printf '%s\n' "$tok"
+    exit 0
+fi
+
+reason=$(tail -n 1 "$STATE/uvx.stderr" 2>/dev/null)
+if [ -s "$CACHE" ] && [ "$(age "$CACHE")" -lt "$STALE_OK" ]; then
+    fail "refresh failed (${reason:-timeout}); serving cached token"
+    cat "$CACHE"; exit 0
+fi
+fail "could not get a token (${reason:-timed out after ${LIMIT} s}) — try: uvx --from \"$SPEC\" alcf-ai auth login"
+exit 1

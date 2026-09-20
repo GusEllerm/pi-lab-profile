@@ -1,0 +1,37 @@
+name: check
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # These extensions touch two Pi internals on purpose. A weekly run says which Pi release
+    # broke them before someone finds out mid-session.
+    - cron: "0 6 * * 1"
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Parse every extension
+        run: bash scripts/check.sh --parse-only
+
+      - name: Unit tests
+        run: node --test tests/
+
+      - name: Agent roles carry no model pin
+        # Endpoints belong in rounds.json; a pin here would break every machine but its author's.
+        run: |
+          if grep -n "^model:" agents/*.md; then
+            echo "::error::agent roles must not pin a model — put it in rounds.json"
+            exit 1
+          fi
+          echo "ok  no pins"
+
+      - name: Config templates are valid JSON
+        run: |
+          for f in profiles/*/*.json; do node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" && echo "ok  $f"; done

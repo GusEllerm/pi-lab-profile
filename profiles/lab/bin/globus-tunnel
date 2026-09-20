@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# globus-tunnel — keep an SSH tunnel to the globus inference endpoint open.
+#
+#   globus-tunnel ensure   # open it if needed, then report health (default)
+#   globus-tunnel status   # report only, never connects
+#   globus-tunnel stop     # close the tunnel this script opened
+#
+# Never blocks for long and never prompts: every failure prints one diagnosis to
+# stderr and exits non-zero, so callers (the pi() shell function) can carry on.
+#
+# The tunnel is its own ssh master on a private socket, so it is independent of
+# the ControlMaster used for interactive `ssh globus1`, and it outlives the pi
+# session that opened it — concurrent pi sessions share it.
+
+set -uo pipefail
+
+HOST=${GLOBUS_TUNNEL_HOST:-globus1}
+PORT=${GLOBUS_TUNNEL_PORT:-8000}
+SOCK="$HOME/.ssh/globus-tunnel-$PORT.sock"
+URL="http://127.0.0.1:$PORT/v1/models"
+
+say() { printf 'globus-tunnel: %s\n' "$*" >&2; }
+
+ours_alive() { [ -S "$SOCK" ] && ssh -S "$SOCK" -O check "$HOST" >/dev/null 2>&1; }
+
+# Prints the served model id; fails if nothing answers like the endpoint.
+served_model() {
+    curl -fsS -m 4 "$URL" 2>/dev/null |
+        python3 -c 'import sys,json; print(json.load(sys.stdin)["data"][0]["id"])' 2>/dev/null
+}
+
+port_owner() { lsof +c 0 -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1" (pid "$2")"}'; }
+
+report() {
+    local model
+    if model=$(served_model); then
+        say "endpoint up on localhost:$PORT — serving $model"
+        return 0
+    fi
+    if ours_alive; then
+        say "tunnel is up but the endpoint is not answering."
+        say "  the model may be reloading (~13 min after its 2-day requeue). check:"
+        say "  ssh $HOST squeue -n qwen38-serve"
+        return 3
+    fi
+    local owner; owner=$(port_owner)
+    if [ -n "$owner" ]; then
+        say "localhost:$PORT is held by $owner, and it is not answering as the endpoint."
+        say "  if that is your own tunnel, the model may be reloading; otherwise free the port"
+        say "  or pick another with GLOBUS_TUNNEL_PORT (and update ~/.pi/agent/models.json)."
+        return 4
+    fi
+    say "no tunnel on localhost:$PORT."
+    return 2
+}
+
+open_tunnel() {
+    [ -e "$SOCK" ] && ! ours_alive && rm -f "$SOCK"   # stale socket from a dead master
+
+    local err
+    # BatchMode: never sit at a passphrase/host-key prompt. -f returns once the
+    # connection and the forward are established (ExitOnForwardFailure).
+    if ! err=$(ssh -f -N -M -S "$SOCK" \
+            -o ControlPersist=no \
+            -o BatchMode=yes \
+            -o ConnectTimeout=8 \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=20 -o ServerAliveCountMax=3 \
+            -L "$PORT:127.0.0.1:$PORT" "$HOST" 2>&1); then
+        say "could not open the tunnel to $HOST: ${err##*$'\n'}"
+        case "$err" in
+            *"timed out"*|*"resolve"*|*"unreachable"*)
+                say "  are you on a network that can reach $HOST (VPN?)" ;;
+            *"Permission denied"*|*"passphrase"*)
+                say "  ssh key not available non-interactively — run 'ssh $HOST true' once" ;;
+        esac
+        return 2
+    fi
+
+    # The forward is bound, but give vLLM a moment to answer through it.
+    local i
+    for i in 1 2 3 4 5; do
+        served_model >/dev/null && break
+        sleep 1
+    done
+}
+
+cmd=${1:-ensure}
+case "$cmd" in
+    ensure)
+        if served_model >/dev/null; then exit 0; fi   # already fine: stay silent
+        if ! ours_alive && [ -z "$(port_owner)" ]; then
+            say "opening tunnel to $HOST ..."
+            open_tunnel || exit $?
+        fi
+        report
+        ;;
+    status)
+        report
+        ;;
+    stop)
+        if ours_alive; then
+            ssh -S "$SOCK" -O exit "$HOST" >/dev/null 2>&1 && say "tunnel closed."
+        else
+            rm -f "$SOCK"; say "no tunnel opened by globus-tunnel is running."
+        fi
+        ;;
+    -h|--help)
+        sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+        ;;
+    *)
+        say "unknown command: $cmd (ensure|status|stop)"; exit 64
+        ;;
+esac

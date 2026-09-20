@@ -1,0 +1,10 @@
+{
+  "_comment": "Copy to ~/.pi/agent/rounds.json and name models you actually have. A seat with no model inherits the session's model. Unresolvable names are dropped, not fatal.",
+  "dev": null,
+  "panel": [
+    { "label": "reviewer A", "model": "openai/gpt-5" },
+    { "label": "reviewer B", "model": "anthropic/claude-sonnet-5" }
+  ],
+  "critic": "google/gemini-3-pro",
+  "timeoutMinutes": 20
+}

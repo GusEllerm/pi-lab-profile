@@ -1,0 +1,38 @@
+{
+  "name": "pi-lab-profile",
+  "version": "0.1.0",
+  "description": "A Pi profile: right-hand status column, an interactive subagent fleet you can attach to, and dev → review → critique rounds across separate inference endpoints.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GusEllerm/pi-lab-profile.git"
+  },
+  "files": [
+    "extensions",
+    "agents",
+    "profiles",
+    "scripts",
+    "docs",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/statusbar.ts",
+      "./extensions/fleet.ts",
+      "./extensions/rounds.ts",
+      "./extensions/endpoints.ts",
+      "./extensions/code-panels.ts",
+      "./extensions/image-window.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.86.0",
+    "@earendil-works/pi-coding-agent": ">=0.86.0",
+    "@earendil-works/pi-tui": ">=0.86.0"
+  },
+  "scripts": {
+    "check": "bash scripts/check.sh",
+    "test": "node --test tests/"
+  }
+}

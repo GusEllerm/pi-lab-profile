@@ -1,0 +1,10 @@
+{
+  "_comment": "Where each /round role runs. Seat B uses different weights, not just a different cluster.",
+  "dev": null,
+  "panel": [
+    { "label": "reviewer A", "model": "alcf-minerva/gpt-oss-120b" },
+    { "label": "reviewer B", "model": "alcf-minerva/nemotron-3-ultra" }
+  ],
+  "critic": "alcf-metis/gpt-oss-120b",
+  "timeoutMinutes": 20
+}

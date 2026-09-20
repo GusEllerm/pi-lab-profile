@@ -1,0 +1,7 @@
+{
+  "maxConcurrent": 3,
+  "maxConcurrentForeground": 2,
+  "workflowsEnabled": false,
+  "widgetMode": "off",
+  "fleetView": false
+}
