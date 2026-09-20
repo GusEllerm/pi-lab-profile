@@ -485,7 +485,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -497,6 +497,18 @@ export default function (pi: ExtensionAPI): void {
 	 * cost is not the column, it is the document beside it, and mounting the column narrows that
 	 * document. This wraps the document component so /prof reports what a frame really costs.
 	 */
+	/**
+	 * pi-cc rebuilds the transcript document as messages arrive, so a wrapper installed at mount
+	 * time ends up on an object nothing renders any more — which is why /prof reported "transcript:
+	 * no renders" across 265 frames. Keep the ScrollView (which is stable) and re-wrap whenever its
+	 * child changes: a pointer compare, once per frame.
+	 */
+	let scrollRef: (Component & { child?: Component; component?: Component }) | undefined;
+	function ensureDocWrapped(): void {
+		const doc = scrollRef?.child ?? scrollRef?.component;
+		if (doc && !(doc as { __profWrapped?: boolean }).__profWrapped) instrumentTranscript(undefined);
+	}
+
 	function instrumentTranscript(root: Component | undefined): void {
 		const find = (node: Component | undefined, depth: number): Component | undefined => {
 			if (!node || depth > 4) return undefined;
@@ -509,7 +521,8 @@ export default function (pi: ExtensionAPI): void {
 		};
 		// ScrollView holds the document in a private `child`; the layout node exposes the same
 		// object as `component`, which is what renderCached() calls render() on.
-		const scroll = find(root, 0) as (Component & { child?: Component; component?: Component }) | undefined;
+		scrollRef = (find(root, 0) as (Component & { child?: Component; component?: Component }) | undefined) ?? scrollRef;
+		const scroll = scrollRef;
 		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: boolean }) | undefined;
 		if (!doc || doc.__profWrapped) return;
 		doc.__profWrapped = true;
@@ -563,6 +576,7 @@ export default function (pi: ExtensionAPI): void {
 		render(width: number): string[] {
 			const c = ctxRef;
 			if (!alive(c)) return [];
+			ensureDocWrapped();
 			const t0 = performance.now();
 			const key = sidebarKey(width, c);
 			const t1 = performance.now();
@@ -731,6 +745,8 @@ export default function (pi: ExtensionAPI): void {
 	 * keep profiling the one part that is already cheap. Instance-patched, once per TUI, with the
 	 * counters repointed on reload rather than the wrapper re-applied.
 	 */
+	/** Accounting for the frame currently being drawn; the mean frame is fine, the tail is not. */
+	let frame = { bytes: 0, rows: 0, writeMs: 0, full: false };
 	const FRAME_HOOK = Symbol.for("pi-statusbar:frame-hook");
 	type FrameHook = { prof?: typeof prof };
 	function instrumentFrames(tui: TUI): void {
@@ -749,6 +765,7 @@ export default function (pi: ExtensionAPI): void {
 		const renderFrame = t.doRender?.bind(tui);
 		if (renderFrame)
 			t.doRender = () => {
+				frame = { bytes: 0, rows: 0, writeMs: 0, full: false };
 				const t0 = performance.now();
 				try {
 					renderFrame();
@@ -759,6 +776,14 @@ export default function (pi: ExtensionAPI): void {
 						p.frames++;
 						p.frameMs += d;
 						if (d > p.frameWorst) p.frameWorst = d;
+						// keep the three worst frames described, since the mean is not what stutters
+						if (d > 40) {
+							p.worstFrames.push(
+								`${d.toFixed(0)}ms (write ${frame.writeMs.toFixed(0)}ms, ${(frame.bytes / 1024).toFixed(1)}KB, ` +
+									`${frame.rows} rows${frame.full ? ", FULL CLEAR" : ""})`,
+							);
+							if (p.worstFrames.length > 24) p.worstFrames.shift();
+						}
 					}
 				}
 			};
@@ -766,13 +791,21 @@ export default function (pi: ExtensionAPI): void {
 		const write = terminal?.write?.bind(terminal);
 		if (terminal && write)
 			terminal.write = (text: string) => {
+				const rows = (text.match(/\x1b\[\d+;1H/g) ?? []).length; // one per row the diff repaints
+				const t0 = performance.now();
+				const result = write(text);
+				const d = performance.now() - t0;
 				const p = hook.prof;
 				if (p) {
 					p.bytes += text.length;
-					// one "move to column 1 of row N" per row the diff decided to repaint
-					p.rows += (text.match(/\x1b\[\d+;1H/g) ?? []).length;
+					p.rows += rows;
+					p.writeMs += d;
 				}
-				return write(text);
+				frame.bytes += text.length;
+				frame.rows += rows;
+				frame.writeMs += d;
+				if (text.includes("\x1b[2J")) frame.full = true; // a full clear, not a row diff
+				return result;
 			};
 	}
 
@@ -1075,7 +1108,8 @@ export default function (pi: ExtensionAPI): void {
 			const frames = prof.frames
 				? `frames: ${prof.frames}, ${(prof.frameMs / prof.frames).toFixed(1)}ms each, worst ${prof.frameWorst.toFixed(1)}ms, ` +
 					`${(prof.bytes / 1024).toFixed(0)}KB out (${Math.round(prof.bytes / prof.frames)}B/frame = ` +
-					`${(prof.rows / prof.frames).toFixed(1)} rows × ${Math.round(prof.bytes / Math.max(1, prof.rows))}B)`
+					`${(prof.rows / prof.frames).toFixed(1)} rows × ${Math.round(prof.bytes / Math.max(1, prof.rows))}B), ` +
+					`write ${(100 * prof.writeMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time`
 				: "frames: none";
 			const wire = prof.colCells
 				? ` · column on the wire: ${(prof.colBytes / Math.max(1, prof.renders)).toFixed(0)}B/frame for ` +
@@ -1086,7 +1120,8 @@ export default function (pi: ExtensionAPI): void {
 					`${(passMs / passes).toFixed(1)}ms each, worst ${passWorst.toFixed(1)}ms`
 				: "transcript: no renders";
 			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
-			ctx.ui.notify(`${frames}${wire}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			const slow = prof.worstFrames.length ? `\nslow frames (>40ms): ${prof.worstFrames.slice(-6).join(" · ")}` : "";
+			ctx.ui.notify(`${frames}${wire}${slow}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1102,6 +1137,8 @@ export default function (pi: ExtensionAPI): void {
 			prof.frameWorst = 0;
 			prof.bytes = 0;
 			prof.rows = 0;
+			prof.writeMs = 0;
+			prof.worstFrames.length = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
 		},
