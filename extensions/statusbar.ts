@@ -479,6 +479,8 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
+	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0 };
 	const sidebarKey = (width: number, c: ExtensionContext): string => {
 		const u = c.getContextUsage();
 		const att = attached?.stats();
@@ -514,10 +516,19 @@ export default function (pi: ExtensionAPI): void {
 		render(width: number): string[] {
 			const c = ctxRef;
 			if (!alive(c)) return [];
+			const t0 = performance.now();
 			const key = sidebarKey(width, c);
-			if (sidebarCache?.key === key) return sidebarCache.lines;
+			const t1 = performance.now();
+			prof.renders++;
+			prof.keyMs += t1 - t0;
+			if (sidebarCache?.key === key) {
+				prof.hits++;
+				prof.ms += performance.now() - t0;
+				return sidebarCache.lines;
+			}
 			const lines = drawSidebar(width, c);
 			sidebarCache = { key, lines };
+			prof.ms += performance.now() - t0;
 			return lines;
 		},
 	} as Component;
@@ -896,6 +907,24 @@ export default function (pi: ExtensionAPI): void {
 		rerender();
 	});
 	pi.on("model_select", () => rerender());
+
+	pi.registerCommand("prof", {
+		description: "What the column costs: renders, cache hits and milliseconds since the last /prof",
+		handler: async (_args, ctx) => {
+			const { renders, hits, ms, keyMs } = prof;
+			ctx.ui.notify(
+				renders
+					? `column: ${renders} renders, ${Math.round((100 * hits) / renders)}% cached, ${ms.toFixed(1)}ms total ` +
+							`(${(ms / renders).toFixed(2)}ms each, key ${(keyMs / renders).toFixed(2)}ms)`
+					: "column: no renders since the last /prof",
+				"info",
+			);
+			prof.renders = 0;
+			prof.hits = 0;
+			prof.ms = 0;
+			prof.keyMs = 0;
+		},
+	});
 
 	pi.registerCommand("pin", {
 		description: "Pin your last message above the transcript: /pin on · /pin off",

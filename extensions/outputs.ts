@@ -157,6 +157,28 @@ function collect(ctx: ExtensionContext): Item[] {
 				});
 				continue;
 			}
+			/**
+			 * A write has no `details` at all, so its result reads "Successfully wrote …" — no more
+			 * use than an edit's did. The content it wrote is on the *call*, so show that instead,
+			 * under the file's own name so the editor highlights it.
+			 */
+			if (tool === "write" && typeof call?.args?.content === "string" && call.args.content.trim()) {
+				const path = typeof call.args.path === "string" ? call.args.path : "";
+				const body = call.args.content.replace(/\n+$/, "");
+				items.push({
+					kind: "tool",
+					label: "write",
+					detail: `${path.split("/").pop() ?? "file"}  ${body.split("\n").length} lines written`,
+					text: body,
+					lines: body.split("\n").length,
+					suggestedName: `${String(++n).padStart(2, "0")}-${path.split("/").pop() ?? "written.txt"}`,
+					isError: Boolean(m.isError),
+					prompt,
+					at,
+				});
+				continue;
+			}
+
 			if (!text) continue;
 			items.push({
 				kind: "tool",
