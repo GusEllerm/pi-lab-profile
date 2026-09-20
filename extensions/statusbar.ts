@@ -378,11 +378,16 @@ export default function (pi: ExtensionAPI): void {
 			const c = ctxRef;
 			if (!pinWanted || !pinnedPrompt || !alive(c)) return [];
 			const t = c.ui.theme;
-			const hint = t.fg("dim", " ctrl+shift+↑");
-			const room = Math.max(10, width - visibleWidth(hint) - 4);
-			const body = t.fg("accent", "▲ ") + t.fg("muted", truncateToWidth(oneLine(pinnedPrompt), room, "…"));
-			const pad = Math.max(1, width - visibleWidth(body) - visibleWidth(hint));
-			return [body + " ".repeat(pad) + hint];
+			// The whole row is shaded with the same background pi gives your messages, so it reads as
+			// yours rather than as chrome. Shading needs the padding to be *inside* the coloured run,
+			// or the tint stops short of the edges and looks like a bug.
+			const hint = "ctrl+shift+↑";
+			const gutter = 2;
+			const room = Math.max(10, width - hint.length - gutter * 2 - 3);
+			const text = truncateToWidth(oneLine(pinnedPrompt), room, "…");
+			const filler = Math.max(1, width - gutter - 2 - visibleWidth(text) - hint.length - gutter);
+			const line = `${" ".repeat(gutter)}▲ ${text}${" ".repeat(filler)}${hint}${" ".repeat(gutter)}`;
+			return [t.bg("userMessageBg", t.fg("muted", line))];
 		},
 	} as Component;
 	let mountedRoot: Component | undefined;
@@ -491,18 +496,18 @@ export default function (pi: ExtensionAPI): void {
 	function drawSidebar(width: number, c: ExtensionContext): string[] {
 		{
 			const t = c.ui.theme;
-			const inner = Math.max(10, width - 3);
+			const inner = Math.max(10, width - 4); // │ + 2 left gutter + 1 right gutter
 			const compact = width < SIDEBAR_COMPACT_BELOW; // label on its own line, value indented
 			const valueWidth = compact ? inner - 2 : inner - 11;
 			const lines: string[] = [];
 			const section = (label: string, state: SlotState | undefined, values: string[]) => {
 				const mark = state && MARK[state];
-				if (compact) lines.push(t.fg("accent", label) + (mark ? ` ${t.fg(mark[1], mark[0])}` : ""));
+				if (compact) lines.push(t.fg("dim", label) + (mark ? ` ${t.fg(mark[1], mark[0])}` : ""));
 				values.forEach((v, i) => {
 					const head = compact
 						? "  "
 						: i === 0
-							? t.fg("accent", label.padEnd(9)) + (mark ? t.fg(mark[1], mark[0]) : " ") + " "
+							? t.fg("dim", label.padEnd(9)) + (mark ? t.fg(mark[1], mark[0]) : " ") + " "
 							: " ".repeat(11);
 					lines.push(head + truncateToWidth(v, valueWidth, "…"));
 				});
