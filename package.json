@@ -23,7 +23,8 @@
       "./extensions/rounds.ts",
       "./extensions/endpoints.ts",
       "./extensions/code-panels.ts",
-      "./extensions/image-window.ts"
+      "./extensions/image-window.ts",
+      "./extensions/outputs.ts"
     ]
   },
   "peerDependencies": {
