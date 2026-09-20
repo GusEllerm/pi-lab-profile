@@ -21,7 +21,7 @@ jobs:
         run: bash scripts/check.sh --parse-only
 
       - name: Unit tests
-        run: node --test tests/
+        run: node --test tests/*.test.ts
 
       - name: Agent roles carry no model pin
         # Endpoints belong in rounds.json; a pin here would break every machine but its author's.
