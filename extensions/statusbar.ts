@@ -45,6 +45,7 @@ import {
 	ScrollView,
 	type TUI,
 	truncateToWidth,
+	type TuiMouseEvent,
 	VStack,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -333,6 +334,57 @@ export default function (pi: ExtensionAPI): void {
 	// ── sidebar ───────────────────────────────────────────────────────────────────────────────
 	let sidebarWanted = true;
 	let rowHeight = 0;
+
+	/**
+	 * The last thing you asked, pinned above the transcript — a reminder of the question while you
+	 * read the answer, and a click target that jumps back to it.
+	 *
+	 * The jump itself is Pi's, not ours: it marks each prompt with an OSC 133 sequence and
+	 * `scrollToPrompt(-1)` finds the nearest one above and puts that row at the top. It is already
+	 * on ctrl+shift+up; this only makes it visible and clickable. scrollToPrompt is not in the
+	 * public typings, so it is called behind a typeof check and the click degrades to nothing.
+	 */
+	let pinnedPrompt: string | undefined;
+	let pinWanted = true;
+	const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+
+	/**
+	 * Pi's prompt marker sits at the *end* of a user message, so scrollToPrompt alone lands just
+	 * past it — you see the reply, not the question. Measured: the first rows after a raw jump were
+	 * "Thought for 2s" and the reply. Lift a couple of rows so the message itself is on screen.
+	 */
+	const PIN_JUMP_LIFT = Number(process.env.PI_PIN_JUMP_LIFT ?? 2);
+
+	function jumpToLastPrompt(): void {
+		const tui = mountedTui as unknown as {
+			scrollToBottom?: () => void;
+			scrollToPrompt?: (d: number) => void;
+			scrollBy?: (n: number) => void;
+		} | undefined;
+		if (!tui || typeof tui.scrollToPrompt !== "function") return;
+		tui.scrollToBottom?.(); // start from the end so "previous" means the most recent prompt
+		tui.scrollToPrompt(-1);
+		if (PIN_JUMP_LIFT > 0) tui.scrollBy?.(-PIN_JUMP_LIFT);
+	}
+
+	const pinBar: Component = {
+		invalidate() {},
+		handleMouse(event: TuiMouseEvent) {
+			if (event.type !== "down" && event.type !== "click") return undefined;
+			jumpToLastPrompt();
+			return { consume: true };
+		},
+		render(width: number): string[] {
+			const c = ctxRef;
+			if (!pinWanted || !pinnedPrompt || !alive(c)) return [];
+			const t = c.ui.theme;
+			const hint = t.fg("dim", " ctrl+shift+↑");
+			const room = Math.max(10, width - visibleWidth(hint) - 4);
+			const body = t.fg("accent", "▲ ") + t.fg("muted", truncateToWidth(oneLine(pinnedPrompt), room, "…"));
+			const pad = Math.max(1, width - visibleWidth(body) - visibleWidth(hint));
+			return [body + " ".repeat(pad) + hint];
+		},
+	} as Component;
 	let mountedRoot: Component | undefined;
 	let mountedTui: TUI | undefined;
 	let piRoot: Component | undefined;
@@ -607,6 +659,14 @@ export default function (pi: ExtensionAPI): void {
 		currentWidth = nextWidth;
 		mountedRoot = new VStack([
 			{
+				component: pinBar,
+				basis: 1,
+				grow: 0,
+				shrink: 0,
+				// costs a transcript row, so it only takes one when there is something to pin
+				visible: () => pinWanted && Boolean(pinnedPrompt),
+			},
+			{
 				component: new HStack([
 					{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 24 },
 					{
@@ -717,9 +777,42 @@ export default function (pi: ExtensionAPI): void {
 		unmountSidebar();
 	});
 
+	// what you just asked, caught as you send it
+	pi.on("input", (event) => {
+		const text = (event as { text?: string })?.text?.trim();
+		if (!text || text.startsWith("/")) return undefined; // a command is not a question to be reminded of
+		pinnedPrompt = text;
+		rerender();
+		return undefined;
+	});
+
+	/** On a resumed session the pin would be blank until the next message, so recover the last one. */
+	function backfillPrompt(ctx: ExtensionContext): void {
+		try {
+			for (const entry of [...(ctx.sessionManager?.getBranch() ?? [])].reverse()) {
+				const msg = (entry as { message?: { role?: string; content?: unknown } })?.message;
+				if (msg?.role !== "user") continue;
+				const text =
+					typeof msg.content === "string"
+						? msg.content
+						: (msg.content as { type?: string; text?: string }[] | undefined)
+								?.filter((p) => p?.type === "text" && p.text)
+								.map((p) => p.text)
+								.join(" ");
+				if (text?.trim() && !text.trim().startsWith("/")) {
+					pinnedPrompt = text.trim();
+					return;
+				}
+			}
+		} catch {
+			// a shape change here costs the pin, nothing else
+		}
+	}
+
 	pi.on("session_start", (_event, ctx) => {
 		dead = false;
 		ctxRef = ctx;
+		if (!pinnedPrompt) backfillPrompt(ctx);
 		if (!resizeHooked && ctx.hasUI) {
 			resizeHooked = true;
 			process.stdout.on("resize", scheduleResizeSettle);
@@ -755,6 +848,23 @@ export default function (pi: ExtensionAPI): void {
 		rerender();
 	});
 	pi.on("model_select", () => rerender());
+
+	pi.registerCommand("pin", {
+		description: "Pin your last message above the transcript: /pin on · /pin off",
+		handler: async (args, ctx) => {
+			const arg = args.trim().toLowerCase();
+			if (arg === "on" || arg === "off") pinWanted = arg === "on";
+			else pinWanted = !pinWanted;
+			if (mountedTui) applySidebarWidth(currentWidth || sidebarWidthFor(mountedTui.terminal.columns ?? 0, widthOverride));
+			rerender();
+			ctx.ui.notify(
+				pinWanted
+					? `Pinned message on${pinnedPrompt ? "" : " — nothing to pin until your next message"}. Click it, or ctrl+shift+↑, to jump back to it.`
+					: "Pinned message off.",
+				"info",
+			);
+		},
+	});
 
 	pi.registerCommand("sidebar", {
 		description: `Right sidebar (fullscreen, ≥ ${SIDEBAR_MIN_COLUMNS} cols): /sidebar on|off · /sidebar <cols>|auto · /sidebar min <cols>`,
