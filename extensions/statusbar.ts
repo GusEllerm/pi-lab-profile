@@ -380,11 +380,64 @@ export default function (pi: ExtensionAPI): void {
 	const sidebarShown = (width: number) =>
 		sidebarWanted && mountedTui !== undefined && mountedTui === tuiRef && tuiRef?.mode === "fullscreen" && width >= minColumns;
 
+	/**
+	 * Pi calls render() on every frame it draws — including every keystroke you type and every
+	 * chunk of streaming text — while this column only *changes* when one of its own events fires
+	 * (message_update, throttled to 250ms; turn_end; a statusbar:slot; fleet's 500ms ticker while
+	 * agents run). Measured, rebuilding it each frame cost ~13ms and ~6KB of output: one wheel
+	 * event took 36.3ms with the column on and 23.1ms with `/sidebar off`.
+	 *
+	 * So the lines are cached against every value the body reads. Nothing here needs explicit
+	 * invalidation: each live number already changes through an event that also requests a render,
+	 * so a changed value means a changed key. The 1-second bucket is the backstop for anything
+	 * time-derived that is not in the key — it caps staleness rather than carrying the design.
+	 */
+	let sidebarCache: { key: string; lines: string[] } | undefined;
+	const sidebarKey = (width: number, c: ExtensionContext): string => {
+		const u = c.getContextUsage();
+		const att = attached?.stats();
+		const sp = speedText(speed.read()); // the formatted string is what is displayed, so key on it
+		return [
+			width,
+			rowHeight,
+			c.ui.theme.fg("accent", "·"), // cheap theme fingerprint: the escape codes change with the theme
+			c.model ? `${c.model.provider}/${c.model.id}` : "",
+			pi.getThinkingLevel(),
+			c.cwd,
+			u?.percent?.toFixed(1) ?? "",
+			u?.contextWindow ?? "",
+			usage.prompt,
+			usage.output,
+			usage.cacheRead,
+			usage.calls,
+			sp?.text ?? "",
+			sp?.live ?? "",
+			attached?.name ?? "",
+			att && [att.status, att.modelId, att.contextPercent, att.tokens, att.turns, att.rate, Math.round(att.elapsedMs / 500)].join(","),
+			[...slots.values()].map((s) => `${s.id}:${s.state}:${s.text}:${(s.details?.() ?? []).join("~")}`).join("|"),
+			[...statusesRef].map(([k, v]) => `${k}=${stripAnsi(v).trim()}`).join("|"),
+			[...endpointLabels].join("|"),
+			Math.floor(Date.now() / 1000), // backstop: nothing may be stale by more than a second
+		].join("\u0000");
+	};
+
 	const sidebar: Component = {
-		invalidate() {},
+		invalidate() {
+			sidebarCache = undefined;
+		},
 		render(width: number): string[] {
 			const c = ctxRef;
 			if (!alive(c)) return [];
+			const key = sidebarKey(width, c);
+			if (sidebarCache?.key === key) return sidebarCache.lines;
+			const lines = drawSidebar(width, c);
+			sidebarCache = { key, lines };
+			return lines;
+		},
+	} as Component;
+
+	function drawSidebar(width: number, c: ExtensionContext): string[] {
+		{
 			const t = c.ui.theme;
 			const inner = Math.max(10, width - 3);
 			const compact = width < SIDEBAR_COMPACT_BELOW; // label on its own line, value indented
@@ -495,8 +548,8 @@ export default function (pi: ExtensionAPI): void {
 				out.push(`${t.fg("borderMuted", "│")}  ${cell}${" ".repeat(Math.max(0, inner - visibleWidth(cell)))}`);
 			}
 			return out;
-		},
-	} as Component;
+		}
+	}
 
 	/**
 	 * A window drag delivers a burst of resize events. Rebuild the layout and force one full repaint
