@@ -485,7 +485,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -570,6 +570,10 @@ export default function (pi: ExtensionAPI): void {
 			prof.keyMs += t1 - t0;
 			if (sidebarCache?.key === key) {
 				prof.hits++;
+				for (const line of sidebarCache.lines) {
+					prof.colBytes += line.length;
+					prof.colCells += visibleWidth(line);
+				}
 				prof.ms += performance.now() - t0;
 				return sidebarCache.lines;
 			}
@@ -721,8 +725,61 @@ export default function (pi: ExtensionAPI): void {
 		}, 120);
 	}
 
+	/**
+	 * A frame is more than its layout: paint, the screen diff, overlays and one terminal write.
+	 * The document render turned out to be 0.7ms of it, so /prof has to time the whole thing or we
+	 * keep profiling the one part that is already cheap. Instance-patched, once per TUI, with the
+	 * counters repointed on reload rather than the wrapper re-applied.
+	 */
+	const FRAME_HOOK = Symbol.for("pi-statusbar:frame-hook");
+	type FrameHook = { prof?: typeof prof };
+	function instrumentFrames(tui: TUI): void {
+		const t = tui as unknown as {
+			[FRAME_HOOK]?: FrameHook;
+			doRender?: () => void;
+			terminal?: { write(text: string): unknown };
+		};
+		const existing = t[FRAME_HOOK];
+		if (existing) {
+			existing.prof = prof; // a reload: keep the one wrapper, point it at the live counters
+			return;
+		}
+		const hook: FrameHook = { prof };
+		t[FRAME_HOOK] = hook;
+		const renderFrame = t.doRender?.bind(tui);
+		if (renderFrame)
+			t.doRender = () => {
+				const t0 = performance.now();
+				try {
+					renderFrame();
+				} finally {
+					const d = performance.now() - t0;
+					const p = hook.prof;
+					if (p) {
+						p.frames++;
+						p.frameMs += d;
+						if (d > p.frameWorst) p.frameWorst = d;
+					}
+				}
+			};
+		const terminal = t.terminal;
+		const write = terminal?.write?.bind(terminal);
+		if (terminal && write)
+			terminal.write = (text: string) => {
+				const p = hook.prof;
+				if (p) {
+					p.bytes += text.length;
+					// one "move to column 1 of row N" per row the diff decided to repaint
+					p.rows += (text.match(/\x1b\[\d+;1H/g) ?? []).length;
+				}
+				return write(text);
+			};
+	}
+
 	function mountSidebar(tui: TUI): void {
-		if (!sidebarWanted || !isViewportTUI(tui)) return;
+		if (!isViewportTUI(tui)) return;
+		instrumentFrames(tui);
+		if (!sidebarWanted) return;
 		const viewport = tui as unknown as {
 			layoutRoot?: Component;
 			setLayoutRoot(c: Component | undefined): void;
@@ -1015,12 +1072,21 @@ export default function (pi: ExtensionAPI): void {
 			const column = renders
 				? `column: ${renders} renders, ${Math.round((100 * hits) / renders)}% cached, ${(ms / renders).toFixed(2)}ms each`
 				: "column: no renders";
+			const frames = prof.frames
+				? `frames: ${prof.frames}, ${(prof.frameMs / prof.frames).toFixed(1)}ms each, worst ${prof.frameWorst.toFixed(1)}ms, ` +
+					`${(prof.bytes / 1024).toFixed(0)}KB out (${Math.round(prof.bytes / prof.frames)}B/frame = ` +
+					`${(prof.rows / prof.frames).toFixed(1)} rows × ${Math.round(prof.bytes / Math.max(1, prof.rows))}B)`
+				: "frames: none";
+			const wire = prof.colCells
+				? ` · column on the wire: ${(prof.colBytes / Math.max(1, prof.renders)).toFixed(0)}B/frame for ` +
+					`${Math.round(prof.colCells / Math.max(1, prof.renders))} cells (${(prof.colBytes / prof.colCells).toFixed(1)}B per cell)`
+				: "";
 			const layout = passes
 				? `transcript: ${passes} renders (${[...prof.widths.entries()].map(([w, n]) => `${n}@${w}col`).join(" + ")}), ` +
 					`${(passMs / passes).toFixed(1)}ms each, worst ${passWorst.toFixed(1)}ms`
 				: "transcript: no renders";
 			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
-			ctx.ui.notify(`${layout} · ${column} · frames asked for: ${asks || "none"}`, "info");
+			ctx.ui.notify(`${frames}${wire}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1031,6 +1097,13 @@ export default function (pi: ExtensionAPI): void {
 			prof.passWorst = 0;
 			prof.asks.clear();
 			prof.widths.clear();
+			prof.frames = 0;
+			prof.frameMs = 0;
+			prof.frameWorst = 0;
+			prof.bytes = 0;
+			prof.rows = 0;
+			prof.colBytes = 0;
+			prof.colCells = 0;
 		},
 	});
 
