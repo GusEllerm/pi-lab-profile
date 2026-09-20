@@ -474,6 +474,25 @@ export default function (pi: ExtensionAPI): void {
 		promptDepth = Math.max(0, promptDepth - 1);
 	});
 
+	/**
+	 * >0 while another extension is doing slow work before it can show its dialog, and wants the
+	 * keyboard reserved for it — `/endpoints` probes four clusters for ~10s before its picker opens.
+	 * Pi has no command-start event, so a command that keeps the user waiting says so itself:
+	 *
+	 *     pi.events.emit("fleet:keys-hold", {});   // …await the slow part…
+	 *     pi.events.emit("fleet:keys-release", {});
+	 *
+	 * Without this, a ↓ pressed while waiting silently focuses the agent list instead, and the
+	 * arrows that should have moved the picker have already been eaten by the time it appears.
+	 */
+	let keysHeld = 0;
+	pi.events.on("fleet:keys-hold", () => {
+		keysHeld++;
+	});
+	pi.events.on("fleet:keys-release", () => {
+		keysHeld = Math.max(0, keysHeld - 1);
+	});
+
 	pi.registerCommand("agent-model", {
 		description: "Move a running subagent to another endpoint: /agent-model [agent] [provider/model]",
 		handler: async (args, ctx) => {
@@ -634,7 +653,7 @@ export default function (pi: ExtensionAPI): void {
 			// A dialog on screen owns the keyboard. Without this, escape closing the /status
 			// dashboard also detached from the attached agent (two escapes to get out of one
 			// popup), and the arrow keys moved this list underneath an open picker.
-			if (promptDepth > 0) return undefined;
+			if (promptDepth > 0 || keysHeld > 0) return undefined;
 			// With the Kitty keyboard protocol (iTerm2 and friends) one press also delivers a release;
 			// acting on both moved the selection twice, which read as "skips the first agent".
 			if (isKeyRelease(data)) return undefined;

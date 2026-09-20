@@ -248,16 +248,24 @@ export default function (pi: ExtensionAPI): void {
 			}
 			if (byProvider.size === 0) return ctx.ui.notify(`No providers found in ${MODELS_JSON}`, "warning");
 
+			// Probing four clusters takes seconds, and until it finishes there is no picker for the
+			// arrow keys to land in — so hold the keyboard, or the agent list quietly takes them.
 			ctx.ui.setStatus("endpoints-probe", ctx.ui.theme.fg("dim", "probing endpoints…"));
-			const sections = await Promise.all(
-				[...byProvider].map(async ([provider, models]) => {
-					const rows = hostOf(models[0].baseUrl) === ALCF_HOST
-						? await probeAlcf(ctx, provider, models)
-						: await probeGlobus(models);
-					return { provider, models, rows };
-				}),
-			);
-			ctx.ui.setStatus("endpoints-probe", undefined);
+			pi.events.emit("fleet:keys-hold", {});
+			let sections: { provider: string; models: AnyModel[]; rows: Row[] }[];
+			try {
+				sections = await Promise.all(
+					[...byProvider].map(async ([provider, models]) => {
+						const rows = hostOf(models[0].baseUrl) === ALCF_HOST
+							? await probeAlcf(ctx, provider, models)
+							: await probeGlobus(models);
+						return { provider, models, rows };
+					}),
+				);
+			} finally {
+				pi.events.emit("fleet:keys-release", {});
+				ctx.ui.setStatus("endpoints-probe", undefined);
+			}
 
 			const options: string[] = [];
 			const pick = new Map<string, Row>();
