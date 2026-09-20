@@ -256,18 +256,22 @@ export default function (pi: ExtensionAPI): void {
 	let lastSpeedRender = 0;
 	let enabled = true;
 
-	const rerender = () => tuiRef?.requestRender();
+	/** /prof counts these: an extra frame is an extra full re-render of the transcript document. */
+	const rerender = (why = "?") => {
+		prof.asks.set(why, (prof.asks.get(why) ?? 0) + 1);
+		tuiRef?.requestRender();
+	};
 
 	pi.events.on("statusbar:transcript", (data) => {
 		attachedPane = (data as { component?: Component } | undefined)?.component;
 		if (mountedTui) applySidebarWidth(currentWidth || sidebarWidthFor(mountedTui.terminal.columns ?? 0, widthOverride));
-		rerender();
+		rerender("statusbar:transcript");
 	});
 	pi.events.on("statusbar:attached", (data) => {
 		attached = (data as { name?: string; stats?: () => AttachedStats } | undefined)?.name
 			? (data as { name: string; stats: () => AttachedStats })
 			: undefined;
-		rerender();
+		rerender("statusbar:attached");
 	});
 
 	pi.events.on("statusbar:slot", (data) => {
@@ -275,7 +279,7 @@ export default function (pi: ExtensionAPI): void {
 		if (!slot?.id) return;
 		slots.set(slot.id, slot);
 		slotsVersion++;
-		rerender();
+		rerender("statusbar:slot");
 	});
 
 	function renderSlot(theme: Theme, text: string, state: SlotState | undefined, width: number): string {
@@ -349,6 +353,7 @@ export default function (pi: ExtensionAPI): void {
 	// ── sidebar ───────────────────────────────────────────────────────────────────────────────
 	let sidebarWanted = true;
 	let rowHeight = 0;
+	let lastViewportWidth = -1; // the viewport width we last reacted to; see the visible() hook
 
 	/**
 	 * The last thing you asked, pinned above the transcript — a reminder of the question while you
@@ -451,7 +456,7 @@ export default function (pi: ExtensionAPI): void {
 	const endpointLabels = new Map<string, string>();
 	pi.events.on("statusbar:endpoint-labels", (data) => {
 		for (const [provider, label] of Object.entries((data ?? {}) as Record<string, string>)) endpointLabels.set(provider, label);
-		rerender();
+		rerender("statusbar:endpoint-labels");
 	});
 	const providerLabel = (provider: string): string =>
 		endpointLabels.get(provider) ?? (ctxRef?.modelRegistry.getProviderDisplayName(provider) ?? provider).split(" · ")[0];
@@ -480,7 +485,49 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0 };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+
+	/**
+	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
+	 * and the ScrollView renders its *entire* document through it — `scrollContentLines:
+	 * renderCached(context, node.component, contentWidth)` — before paintBox slices out the ~45 rows
+	 * you can see. So the whole transcript is re-rendered on every frame, at the content width.
+	 *
+	 * That is why this column measures at half a millisecond while the session still stalls: the
+	 * cost is not the column, it is the document beside it, and mounting the column narrows that
+	 * document. This wraps the document component so /prof reports what a frame really costs.
+	 */
+	function instrumentTranscript(root: Component | undefined): void {
+		const find = (node: Component | undefined, depth: number): Component | undefined => {
+			if (!node || depth > 4) return undefined;
+			if (node instanceof ScrollView) return node;
+			for (const kid of (node as { children?: Component[] }).children ?? []) {
+				const hit = find(kid, depth + 1);
+				if (hit) return hit;
+			}
+			return undefined;
+		};
+		// ScrollView holds the document in a private `child`; the layout node exposes the same
+		// object as `component`, which is what renderCached() calls render() on.
+		const scroll = find(root, 0) as (Component & { child?: Component; component?: Component }) | undefined;
+		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: boolean }) | undefined;
+		if (!doc || doc.__profWrapped) return;
+		doc.__profWrapped = true;
+		const original = doc.render.bind(doc);
+		doc.render = (width: number) => {
+			const t0 = performance.now();
+			try {
+				return original(width);
+			} finally {
+				const d = performance.now() - t0;
+				prof.passes++;
+				prof.passMs += d;
+				prof.widths.set(width, (prof.widths.get(width) ?? 0) + 1);
+				if (d > prof.passWorst) prof.passWorst = d;
+			}
+		};
+	}
+
 	const sidebarKey = (width: number, c: ExtensionContext): string => {
 		const u = c.getContextUsage();
 		const att = attached?.stats();
@@ -666,6 +713,7 @@ export default function (pi: ExtensionAPI): void {
 		if (resizeTimer) clearTimeout(resizeTimer);
 		resizeTimer = setTimeout(() => {
 			resizeTimer = undefined;
+			prof.settles++;
 			const tui = tuiRef;
 			if (!tui) return;
 			if (mountedTui === tui) applySidebarWidth(sidebarWidthFor(tui.terminal.columns ?? 0, widthOverride));
@@ -693,9 +741,12 @@ export default function (pi: ExtensionAPI): void {
 			};
 		}
 		hook.onRoot = (component) => {
-			if (!dead && component !== mountedRoot) setTimeout(() => mountSidebar(tui), 0);
+			if (dead) return;
+			instrumentTranscript(component);
+			if (component !== mountedRoot) setTimeout(() => mountSidebar(tui), 0);
 		};
 		const root = viewport.layoutRoot;
+		if (root) instrumentTranscript(root); // the document object is shared, so this covers sidebar off too
 		if (!root || root === mountedRoot) return;
 		const kids = (root as { children?: Component[] }).children;
 		if (!(root instanceof VStack) || kids?.length !== 2 || !(kids[0] instanceof ScrollView)) return; // unknown layout: leave it
@@ -705,11 +756,51 @@ export default function (pi: ExtensionAPI): void {
 		applySidebarWidth(sidebarWidthFor(tui.terminal.columns ?? 0, widthOverride));
 	}
 
+	/**
+	 * An hstack measures every child's height — `intrinsicHeights = entries.map(measureHeight)` in
+	 * pi-tui's layout — and measuring a ScrollView renders its *entire document*, because
+	 * measureHeight goes through Container.render rather than the scroll layout node. That render
+	 * is then discarded: align defaults to "stretch", so each child is given the stack's own height
+	 * and the measured one is never read.
+	 *
+	 * The result is that putting the transcript beside anything renders the whole transcript twice
+	 * per frame — measured at 40 document renders per 20 frames with this column mounted against 20
+	 * without it. It is why the column made scrolling stutter while the column itself profiled at
+	 * half a millisecond: the cost was never in here, it was the transcript being rendered twice.
+	 *
+	 * So while the split layout is mounted, the transcript's *measurement* render is stubbed to a
+	 * block of blank lines of the right height. The real content still renders through the scroll
+	 * node (renderCached on node.component), which is the path that actually paints.
+	 */
+	let stubbedPane: Component | undefined;
+	function stubMeasureRender(component: Component | undefined): void {
+		const sv = component as (Component & { __measureStub?: boolean }) | undefined;
+		if (stubbedPane && stubbedPane !== sv) restoreMeasureRender(stubbedPane); // attach/detach swaps the pane
+		if (!sv || !(sv instanceof ScrollView) || sv.__measureStub) return;
+		stubbedPane = sv;
+		sv.__measureStub = true;
+		Object.defineProperty(sv, "render", {
+			configurable: true,
+			writable: true,
+			value: (_width: number) => new Array(Math.max(1, rowHeight)).fill(""),
+		});
+	}
+
+	/** Hand the transcript its real render back (sidebar off, reload, shutdown). */
+	function restoreMeasureRender(component: Component | undefined): void {
+		const sv = component as (Component & { __measureStub?: boolean }) | undefined;
+		if (stubbedPane === sv) stubbedPane = undefined;
+		if (!sv?.__measureStub) return;
+		delete sv.__measureStub;
+		delete (sv as { render?: unknown }).render; // uncovers ScrollView.prototype.render again
+	}
+
 	/** (Re)build the split layout at a given sidebar width. */
 	function applySidebarWidth(nextWidth: number): void {
 		const tui = mountedTui as unknown as { setLayoutRoot(c: Component | undefined): void } | undefined;
 		if (!tui || !piKids) return;
 		const [transcript, dock] = [attachedPane ?? piKids[0], piKids[1]];
+		stubMeasureRender(transcript);
 		currentWidth = nextWidth;
 		mountedRoot = new VStack([
 			{
@@ -731,9 +822,17 @@ export default function (pi: ExtensionAPI): void {
 						minSize: 18,
 						visible: (vp) => {
 							rowHeight = vp.height;
-							const wanted = sidebarWidthFor(vp.width, widthOverride);
-							// terminal resized into another width class: rebuild once the drag settles
-							if (wanted !== currentWidth) scheduleResizeSettle();
+							// React to the viewport *changing*, never to a mismatch. This hook runs on every
+							// layout pass, and `currentWidth` is derived from tui.terminal.columns while vp.width
+							// is the stack's own width — one scrollbar column between them puts the two on
+							// different sides of a width bracket, the mismatch never clears, and every pass
+							// re-arms a timer whose callback forces a full repaint. That is a permanent ~8Hz
+							// repaint of the whole transcript for as long as the column is mounted, which is
+							// exactly the "freeze, then catch up" the user reported.
+							if (vp.width !== lastViewportWidth) {
+								lastViewportWidth = vp.width;
+								if (sidebarWidthFor(vp.width, widthOverride) !== currentWidth) scheduleResizeSettle();
+							}
 							return sidebarWanted && vp.width >= minColumns;
 						},
 					},
@@ -752,6 +851,7 @@ export default function (pi: ExtensionAPI): void {
 		const tui = mountedTui as unknown as { setLayoutRoot(c: Component | undefined): void } | undefined;
 		mountedRoot = undefined;
 		mountedTui = undefined;
+		restoreMeasureRender(stubbedPane);
 		if (tui && piRoot) tui.setLayoutRoot(piRoot);
 	}
 
@@ -841,7 +941,7 @@ export default function (pi: ExtensionAPI): void {
 		if (!text || text.startsWith("/")) return undefined; // a command is not a question to be reminded of
 		pinnedPrompt = text;
 		pinCache = undefined;
-		rerender();
+		rerender("input");
 		return undefined;
 	});
 
@@ -883,11 +983,11 @@ export default function (pi: ExtensionAPI): void {
 	// message_end fires before Pi appends the message to the session, so re-sum once the turn is stored
 	pi.on("turn_end", (_event, ctx) => {
 		usage = sumUsage(ctx);
-		rerender();
+		rerender("turn_end");
 	});
 	pi.on("agent_end", (_event, ctx) => {
 		usage = sumUsage(ctx);
-		rerender();
+		rerender("agent_end");
 	});
 	pi.on("message_start", (event) => {
 		if ((event.message as { role?: string })?.role === "assistant") speed.start();
@@ -899,30 +999,38 @@ export default function (pi: ExtensionAPI): void {
 		// the transcript re-renders on its own; throttle our own repaints to keep the number moving
 		if (Date.now() - lastSpeedRender > 250) {
 			lastSpeedRender = Date.now();
-			rerender();
+			rerender("message_update");
 		}
 	});
 	pi.on("message_end", (event) => {
 		if ((event.message as { role?: string })?.role === "assistant") speed.end(event.message as never);
-		rerender();
+		rerender("message_end");
 	});
-	pi.on("model_select", () => rerender());
+	pi.on("model_select", () => rerender("model_select"));
 
 	pi.registerCommand("prof", {
 		description: "What the column costs: renders, cache hits and milliseconds since the last /prof",
 		handler: async (_args, ctx) => {
-			const { renders, hits, ms, keyMs } = prof;
-			ctx.ui.notify(
-				renders
-					? `column: ${renders} renders, ${Math.round((100 * hits) / renders)}% cached, ${ms.toFixed(1)}ms total ` +
-							`(${(ms / renders).toFixed(2)}ms each, key ${(keyMs / renders).toFixed(2)}ms)`
-					: "column: no renders since the last /prof",
-				"info",
-			);
+			const { renders, hits, ms, keyMs, passes, passMs, passWorst } = prof;
+			const column = renders
+				? `column: ${renders} renders, ${Math.round((100 * hits) / renders)}% cached, ${(ms / renders).toFixed(2)}ms each`
+				: "column: no renders";
+			const layout = passes
+				? `transcript: ${passes} renders (${[...prof.widths.entries()].map(([w, n]) => `${n}@${w}col`).join(" + ")}), ` +
+					`${(passMs / passes).toFixed(1)}ms each, worst ${passWorst.toFixed(1)}ms`
+				: "transcript: no renders";
+			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
+			ctx.ui.notify(`${layout} · ${column} · frames asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
 			prof.keyMs = 0;
+			prof.settles = 0;
+			prof.passes = 0;
+			prof.passMs = 0;
+			prof.passWorst = 0;
+			prof.asks.clear();
+			prof.widths.clear();
 		},
 	});
 
@@ -933,7 +1041,7 @@ export default function (pi: ExtensionAPI): void {
 			if (arg === "on" || arg === "off") pinWanted = arg === "on";
 			else pinWanted = !pinWanted;
 			if (mountedTui) applySidebarWidth(currentWidth || sidebarWidthFor(mountedTui.terminal.columns ?? 0, widthOverride));
-			rerender();
+			rerender("pin");
 			ctx.ui.notify(
 				pinWanted
 					? `Pinned message on${pinnedPrompt ? "" : " — nothing to pin until your next message"}. Click it, or ctrl+shift+↑, to jump back to it.`
@@ -951,7 +1059,7 @@ export default function (pi: ExtensionAPI): void {
 			if (min) {
 				minColumns = Number(min[1]);
 				ctx.ui.notify(`sidebar: shown when the terminal is at least ${minColumns} columns`, "info");
-				rerender();
+				rerender("sidebar");
 				return;
 			}
 			if (arg === "auto" || /^\d+$/.test(arg)) {
@@ -965,7 +1073,7 @@ export default function (pi: ExtensionAPI): void {
 			if (sidebarWanted && tuiRef) mountSidebar(tuiRef);
 			if (!sidebarWanted) unmountSidebar();
 			if (sidebarWanted && tuiRef?.mode !== "fullscreen") ctx.ui.notify("The sidebar needs fullscreen mode (/settings → TUI mode).", "info");
-			rerender();
+			rerender("sidebar");
 		},
 	});
 
