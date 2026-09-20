@@ -60,12 +60,12 @@ cluster username and key:
 
 ```sshconfig
 Host globus1
-    HostName globus1.cs.uchicago.edu
+    HostName <the cluster's hostname — ask the lab>
     User <their-cluster-username>
     IdentityFile <their-key>
 ```
 
-Alternatively, set `GLOBUS_TUNNEL_HOST=<user>@globus1.cs.uchicago.edu` in the environment. The
+Alternatively, set `GLOBUS_TUNNEL_HOST=<user>@<cluster-host>` in the environment. The
 tunnel helper honours it.
 
 ## 2. Install Pi
