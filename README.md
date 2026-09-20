@@ -105,10 +105,6 @@ any edit, and after any Pi upgrade; CI runs the parse half on every push.
   old widget reappears, that is why, and `/fleet takeover` fixes it.
 - `pi-cc-extensions` is optional but assumed by the screenshots (collapsed thinking, compact tool rows).
 
-## License
-
-MIT.
-
 ## Developing it
 
 The author's own machine runs the profile *from this working tree*, so there is one copy of
@@ -131,3 +127,7 @@ published package into a throwaway agent dir instead of your own:
 PI_CODING_AGENT_DIR=/tmp/pi-clean pi install git:github.com/GusEllerm/pi-lab-profile
 PI_CODING_AGENT_DIR=/tmp/pi-clean pi
 ```
+
+## License
+
+MIT.
