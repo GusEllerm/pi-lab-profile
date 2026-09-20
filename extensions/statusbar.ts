@@ -272,6 +272,7 @@ export default function (pi: ExtensionAPI): void {
 		const slot = data as Slot;
 		if (!slot?.id) return;
 		slots.set(slot.id, slot);
+		slotsVersion++;
 		rerender();
 	});
 
@@ -345,6 +346,7 @@ export default function (pi: ExtensionAPI): void {
 	 * public typings, so it is called behind a typeof check and the click degrades to nothing.
 	 */
 	let pinnedPrompt: string | undefined;
+	let pinCache: { key: string; lines: string[] } | undefined;
 	let pinWanted = true;
 	const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 
@@ -377,6 +379,10 @@ export default function (pi: ExtensionAPI): void {
 		render(width: number): string[] {
 			const c = ctxRef;
 			if (!pinWanted || !pinnedPrompt || !alive(c)) return [];
+			// same reasoning as the column: this draws on every frame and changes only when you send
+			// a message, and truncateToWidth is an Intl.Segmenter walk
+			const key = `${width}|${pinnedPrompt}`;
+			if (pinCache?.key === key) return pinCache.lines;
 			const t = c.ui.theme;
 			// The whole row is shaded with the same background pi gives your messages, so it reads as
 			// yours rather than as chrome. Shading needs the padding to be *inside* the coloured run,
@@ -387,7 +393,9 @@ export default function (pi: ExtensionAPI): void {
 			const text = truncateToWidth(oneLine(pinnedPrompt), room, "…");
 			const filler = Math.max(1, width - gutter - 2 - visibleWidth(text) - hint.length - gutter);
 			const line = `${" ".repeat(gutter)}▲ ${text}${" ".repeat(filler)}${hint}${" ".repeat(gutter)}`;
-			return [t.bg("userMessageBg", t.fg("muted", line))];
+			const lines = [t.bg("userMessageBg", t.fg("muted", line))];
+			pinCache = { key, lines };
+			return lines;
 		},
 	} as Component;
 	let mountedRoot: Component | undefined;
@@ -449,6 +457,13 @@ export default function (pi: ExtensionAPI): void {
 	 * so a changed value means a changed key. The 1-second bucket is the backstop for anything
 	 * time-derived that is not in the key — it caps staleness rather than carrying the design.
 	 */
+	/**
+	 * Bumped when a slot is republished. The key must never *call* a slot's details(): fleet builds
+	 * its agent rows in there, through truncateToWidth → Intl.Segmenter, and the key runs on every
+	 * frame even when the cache hits. That is how the first version of this memo made things worse
+	 * rather than better — 115% CPU while scrolling, against 55% with the column off.
+	 */
+	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	const sidebarKey = (width: number, c: ExtensionContext): string => {
 		const u = c.getContextUsage();
@@ -471,8 +486,8 @@ export default function (pi: ExtensionAPI): void {
 			sp?.live ?? "",
 			attached?.name ?? "",
 			att && [att.status, att.modelId, att.contextPercent, att.tokens, att.turns, att.rate, Math.round(att.elapsedMs / 500)].join(","),
-			[...slots.values()].map((s) => `${s.id}:${s.state}:${s.text}:${(s.details?.() ?? []).join("~")}`).join("|"),
-			[...statusesRef].map(([k, v]) => `${k}=${stripAnsi(v).trim()}`).join("|"),
+			slotsVersion, // not the slots themselves: details() is expensive and runs per frame
+			statusesRef.size, // a count, not the text: stripAnsi is a regex over every status, per frame
 			[...endpointLabels].join("|"),
 			Math.floor(Date.now() / 1000), // backstop: nothing may be stale by more than a second
 		].join("\u0000");
@@ -791,6 +806,7 @@ export default function (pi: ExtensionAPI): void {
 		const text = (event as { text?: string })?.text?.trim();
 		if (!text || text.startsWith("/")) return undefined; // a command is not a question to be reminded of
 		pinnedPrompt = text;
+		pinCache = undefined;
 		rerender();
 		return undefined;
 	});
