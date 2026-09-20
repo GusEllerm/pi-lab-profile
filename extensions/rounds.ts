@@ -67,13 +67,33 @@ function readConfig(cwd: string): RoundsConfig {
 }
 
 export default function (pi: ExtensionAPI): void {
+	/**
+	 * A round outlives a `/reload`: its phases are promises, and pi-subagents keeps running the
+	 * agents. But the activation that started it is gone, and emitting on a dead `pi` throws — from
+	 * an async continuation that is an uncaughtException, which kills the session. So every emit is
+	 * dead-checked, and a reload quietly orphans the round rather than taking pi with it.
+	 */
+	let dead = false;
+	pi.on("session_shutdown", () => {
+		dead = true;
+	});
+
+	function emit(event: string, payload: unknown): void {
+		if (dead) return;
+		try {
+			pi.events.emit(event, payload);
+		} catch {
+			dead = true;
+		}
+	}
+
 	let running: { task: string; phase: string; since: number } | undefined;
 	let lastSummary: string | undefined;
 	let cancelled = false;
 	const live = new Set<string>(); // agents this round started and has not yet seen finish
 
 	function publish(text: string, state: "busy" | "idle" | "ok" | "warn", details?: () => string[]): void {
-		pi.events.emit("statusbar:slot", { id: "round", text, state, statusKey: "rounds", details });
+		emit("statusbar:slot", { id: "round", text, state, statusKey: "rounds", details });
 	}
 	const idleSlot = () =>
 		publish(lastSummary ? `round ${lastSummary}` : "round –", lastSummary ? "ok" : "idle", () =>
@@ -94,7 +114,7 @@ export default function (pi: ExtensionAPI): void {
 					unsub();
 					resolve(reply?.success ? { id: (reply.data as { id?: string })?.id } : { error: String(reply?.error ?? "spawn refused") });
 				});
-				pi.events.emit("subagents:rpc:spawn", {
+				emit("subagents:rpc:spawn", {
 					requestId,
 					type: role,
 					prompt,
@@ -130,13 +150,13 @@ export default function (pi: ExtensionAPI): void {
 		});
 		// we report the result ourselves; stop pi-subagents notifying about it as well (must be
 		// inside the 200ms nudge hold, so no awaits between the event and this emit)
-		pi.events.emit("subagents:rpc:consume", { requestId: `rounds-consume-${id}`, agentId: id });
+		emit("subagents:rpc:consume", { requestId: `rounds-consume-${id}`, agentId: id });
 		live.delete(id);
 		return outcome;
 	}
 
 	function stopAgent(id: string): void {
-		pi.events.emit("subagents:rpc:stop", { requestId: `rounds-stop-${id}`, agentId: id });
+		emit("subagents:rpc:stop", { requestId: `rounds-stop-${id}`, agentId: id });
 	}
 
 	const text = (o: AgentOutcome) => o.result?.trim() || o.error?.trim() || "(no output)";
@@ -200,7 +220,7 @@ export default function (pi: ExtensionAPI): void {
 				unsub();
 				resolve(true);
 			});
-			pi.events.emit("subagents:rpc:ping", { requestId });
+			emit("subagents:rpc:ping", { requestId });
 		});
 	}
 
@@ -289,6 +309,7 @@ export default function (pi: ExtensionAPI): void {
 			// other phases trimmed. The whole thing is on disk, and a round that pastes three agent
 			// transcripts into the context window has spent the budget it was meant to save.
 			const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n).trimEnd()}\n… (${s.length - n} more characters in the report)`);
+			if (dead) return;
 			pi.sendMessage(
 				{
 					customType: "rounds",

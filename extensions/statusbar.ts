@@ -772,6 +772,10 @@ export default function (pi: ExtensionAPI): void {
 	// mount, leaving a dead sidebar on screen that crashes the next layout pass.
 	pi.on("session_shutdown", () => {
 		dead = true;
+		if (resizeTimer) {
+			clearTimeout(resizeTimer);
+			resizeTimer = undefined;
+		}
 		const tui = mountedTui as unknown as { [LAYOUT_HOOK]?: LayoutHook } | undefined;
 		if (tui?.[LAYOUT_HOOK]) tui[LAYOUT_HOOK].onRoot = undefined;
 		unmountSidebar();

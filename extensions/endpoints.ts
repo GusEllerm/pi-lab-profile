@@ -251,7 +251,14 @@ export default function (pi: ExtensionAPI): void {
 			// Probing four clusters takes seconds, and until it finishes there is no picker for the
 			// arrow keys to land in — so hold the keyboard, or the agent list quietly takes them.
 			ctx.ui.setStatus("endpoints-probe", ctx.ui.theme.fg("dim", "probing endpoints…"));
-			pi.events.emit("fleet:keys-hold", {});
+			const keys = (event: string) => {
+				try {
+					pi.events.emit(event, {});
+				} catch {
+					// a /reload during the probe leaves nothing to tell; never take the session down for it
+				}
+			};
+			keys("fleet:keys-hold");
 			let sections: { provider: string; models: AnyModel[]; rows: Row[] }[];
 			try {
 				sections = await Promise.all(
@@ -263,7 +270,7 @@ export default function (pi: ExtensionAPI): void {
 					}),
 				);
 			} finally {
-				pi.events.emit("fleet:keys-release", {});
+				keys("fleet:keys-release");
 				ctx.ui.setStatus("endpoints-probe", undefined);
 			}
 

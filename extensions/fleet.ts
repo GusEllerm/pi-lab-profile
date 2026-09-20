@@ -292,8 +292,8 @@ export default function (pi: ExtensionAPI): void {
 			},
 		};
 		const pane = new ScrollView(content, { follow: "end", primary: true }); // pi's own scroll keys drive it
-		pi.events.emit("statusbar:transcript", { component: pane });
-		pi.events.emit("statusbar:attached", {
+		emit("statusbar:transcript", { component: pane });
+		emit("statusbar:attached", {
 			name: agent.description || agent.type,
 			stats: () => {
 				const info = live(agent.id);
@@ -317,8 +317,8 @@ export default function (pi: ExtensionAPI): void {
 		if (!attachedId) return;
 		attachedId = undefined;
 		paneCache = undefined;
-		pi.events.emit("statusbar:transcript", {});
-		pi.events.emit("statusbar:attached", {});
+		emit("statusbar:transcript", {});
+		emit("statusbar:attached", {});
 		rerender();
 	}
 	const forget = (id: string) => liveCache.delete(id);
@@ -359,9 +359,14 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function ensureTicker(): void {
-		const active = roster().length > 0;
+		const active = !dead && roster().length > 0;
 		if (active && !ticker)
 			ticker = setInterval(() => {
+				if (dead) {
+					clearInterval(ticker);
+					ticker = undefined;
+					return;
+				}
 				publishSlot();
 				rerender();
 			}, TICK_MS);
@@ -441,7 +446,7 @@ export default function (pi: ExtensionAPI): void {
 		const list = roster();
 		const running = list.filter((a) => (live(a.id)?.status ?? a.status) === "running").length;
 		const queued = list.filter((a) => (live(a.id)?.status ?? a.status) === "queued").length;
-		pi.events.emit("statusbar:slot", {
+		emit("statusbar:slot", {
 			id: "agents",
 			order: 3,
 			text: running || queued ? `agents ${running}${queued ? ` +${queued} queued` : ""}` : "agents –",
@@ -464,6 +469,23 @@ export default function (pi: ExtensionAPI): void {
 
 	/** Agents moved with /agent-model: pi-subagents' invocation keeps the spawn-time model. */
 	const endpointOverrides = new Map<string, string>();
+
+	/**
+	 * `/reload` replaces the activation, and from that moment `pi.events.emit` throws
+	 * ("extension ctx is stale"). That is survivable from a render — it is not survivable from a
+	 * timer, where the throw is an uncaughtException that kills pi. The 500ms ticker below did
+	 * exactly that. So: stop the clock on shutdown, and treat every emit as dead-checked.
+	 */
+	let dead = false;
+
+	function emit(event: string, payload: unknown): void {
+		if (dead) return;
+		try {
+			pi.events.emit(event, payload);
+		} catch {
+			dead = true; // the activation went away between the check and the call
+		}
+	}
 
 	/** >0 while Pi is showing a blocking dialog (select/confirm/input/editor/custom). */
 	let promptDepth = 0;
@@ -623,7 +645,19 @@ export default function (pi: ExtensionAPI): void {
 		},
 	});
 
+	// Stop the clock before the activation is replaced. A ticker that outlives it emits into a dead
+	// pi, and a throw from a timer is an uncaughtException — it takes the whole session down.
+	pi.on("session_shutdown", () => {
+		dead = true;
+		if (ticker) {
+			clearInterval(ticker);
+			ticker = undefined;
+		}
+		liveCache.clear();
+	});
+
 	pi.on("session_start", (_event, ctx) => {
+		dead = false;
 		ctxRef = ctx;
 		if (!ctx.hasUI) return;
 		const surfaces = subagentSurfaces(ctx.cwd);
