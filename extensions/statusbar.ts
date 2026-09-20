@@ -78,6 +78,8 @@ export interface Slot {
 	state?: SlotState;
 	/** setStatus() key this slot stands in for; its raw text is not repeated under OTHER. */
 	statusKey?: string;
+	/** Tokens attributable to this slot's work — fleet publishes the subagent total here. */
+	tokens?: number;
 	details?: () => string[];
 }
 
@@ -290,6 +292,7 @@ export default function (pi: ExtensionAPI): void {
 		const ep = slots.get("endpoint");
 		const img = slots.get("images");
 		const u = ctx.getContextUsage();
+		const u2 = usage;
 		const claimed = new Set([...slots.values()].map((s) => s.statusKey).filter(Boolean));
 		claimed.add("subagents");
 		const other = [...statusesRef].filter(([k, v]) => !claimed.has(k) && stripAnsi(v).trim());
@@ -297,6 +300,17 @@ export default function (pi: ExtensionAPI): void {
 		const sections: [string, string[]][] = [
 			["ENDPOINT", ep?.details?.() ?? [ep?.text ?? "unknown"]],
 			["AGENTS", slots.get("agents")?.details?.() ?? ["none running"]],
+			[
+				"TOTAL",
+				(() => {
+					const agentTokens = slots.get("agents")?.tokens ?? 0;
+					const here = u2.prompt + u2.output;
+					return [
+						`${fmt(here + agentTokens)} tokens`,
+						agentTokens ? `${fmt(here)} in this session · ${fmt(agentTokens)} in subagents` : "no subagents this session",
+					];
+				})(),
+			],
 			["ROUND", slots.get("round")?.details?.() ?? ["no round this session"]],
 			["IMAGES", img?.details?.() ?? ["no images in this session"]],
 			[
@@ -594,10 +608,19 @@ export default function (pi: ExtensionAPI): void {
 
 			const cache = usage.prompt ? `cache ${((100 * usage.cacheRead) / usage.prompt).toFixed(0)}% · ` : "";
 			const sp = speedText(speed.read());
+			// Everything this session has cost, here and in its subagents. fleet keeps the agent
+			// figure cumulative (an agent leaving the roster must not make the total fall) and
+			// publishes it on its slot, so nothing is summed per frame.
+			const agentTokens = slots.get("agents")?.tokens ?? 0;
+			const sessionTokens = usage.prompt + usage.output;
 			section("USAGE", undefined, [
 				`in ${fmt(usage.prompt)} · out ${fmt(usage.output)}`,
 				t.fg("dim", `${cache}${usage.calls} call${usage.calls === 1 ? "" : "s"}`),
 				...(sp ? [sp.live ? t.fg("accent", sp.text) : t.fg("dim", sp.text)] : []),
+			]);
+			section("TOTAL", undefined, [
+				t.fg("text", fmt(sessionTokens + agentTokens)),
+				t.fg("dim", agentTokens ? `${fmt(sessionTokens)} + ${fmt(agentTokens)} agents` : "this session"),
 			]);
 
 			const claimed = new Set([...slots.values()].map((x) => x.statusKey).filter(Boolean));

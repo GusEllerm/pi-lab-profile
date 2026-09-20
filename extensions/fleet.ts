@@ -253,6 +253,11 @@ function subagentSurfaces(cwd: string): { on: boolean; projectFile: string } {
 
 export default function (pi: ExtensionAPI): void {
 	const agents = new Map<string, Tracked>();
+	/**
+	 * Every agent this session has ever run, id → its token total. The roster forgets an agent
+	 * 20s after it finishes, so summing the roster would make a cumulative figure go *down*.
+	 */
+	const tokensById = new Map<string, number>();
 	let ctxRef: ExtensionContext | undefined;
 	let tuiRef: TUI | undefined;
 	let selectedId: string | undefined; // undefined = list not focused; an id survives list changes
@@ -446,9 +451,17 @@ export default function (pi: ExtensionAPI): void {
 		const list = roster();
 		const running = list.filter((a) => (live(a.id)?.status ?? a.status) === "running").length;
 		const queued = list.filter((a) => (live(a.id)?.status ?? a.status) === "queued").length;
+		// refresh the ledger for agents still tracked; finished ones keep their last known figure
+		for (const a of list) {
+			const t = live(a.id)?.tokens;
+			if (t) tokensById.set(a.id, t);
+		}
+		let agentTokens = 0;
+		for (const t of tokensById.values()) agentTokens += t;
 		emit("statusbar:slot", {
 			id: "agents",
 			order: 3,
+			tokens: agentTokens,
 			text: running || queued ? `agents ${running}${queued ? ` +${queued} queued` : ""}` : "agents –",
 			state: running || queued ? "busy" : "idle",
 			statusKey: "subagents",
