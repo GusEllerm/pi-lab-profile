@@ -19,9 +19,10 @@ import { type Component, matchesKey, truncateToWidth, visibleWidth } from "@eare
 
 const OPEN_IN_EDITOR_LINES = Number(process.env.PI_OPEN_EDITOR_LINES ?? 40);
 const MAX_ENTRIES = 40; // the picker is for finding something recent, not browsing all of history
+const MIN_THINKING_CHARS = Number(process.env.PI_OPEN_MIN_THINKING ?? 200);
 
 type Item = {
-	kind: "tool" | "thinking" | "bash";
+	kind: "tool" | "thinking" | "bash" | "diff";
 	label: string; // what produced it, for the picker
 	detail: string; // the command or file, for the picker
 	text: string;
@@ -90,7 +91,9 @@ function collect(ctx: ExtensionContext): Item[] {
 		if (m.role === "assistant") {
 			for (const part of (m.content ?? []) as any[]) {
 				if (part?.type === "toolCall" && part.id) calls.set(part.id, { name: part.name, args: part.arguments ?? {} });
-				if (part?.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim()) {
+				// A one-line "Should add a docstring to the get method" is readable where it already is;
+				// listing every such aside buries the things worth reopening.
+				if (part?.type === "thinking" && typeof part.thinking === "string" && part.thinking.trim().length >= MIN_THINKING_CHARS) {
 					const text = part.thinking.trim();
 					items.push({
 						kind: "thinking",
@@ -126,9 +129,35 @@ function collect(ctx: ExtensionContext): Item[] {
 
 		if (m.role === "toolResult") {
 			const text = (typeof m.content === "string" ? m.content : ((m.content ?? []) as any[]).map((c) => c?.text ?? "").join("\n")).trim();
-			if (!text) continue;
 			const call = m.toolCallId ? calls.get(m.toolCallId) : undefined;
 			const tool = m.toolName ?? call?.name ?? "tool";
+
+			/**
+			 * An edit's *result* is one line ("Successfully replaced 1 block(s)…"), which is useless to
+			 * re-read. The change itself is on `details`: pi already computes `patch` (a real unified
+			 * diff) and `diff` (the same with line numbers) — the very data pi-cc renders inline. So an
+			 * edit becomes a diff entry rather than a status message, and no differ of our own is needed.
+			 */
+			const patch = typeof m.details?.patch === "string" ? m.details.patch.trim() : "";
+			if (patch) {
+				const path = typeof call?.args?.path === "string" ? call.args.path : "";
+				const body = path ? `# ${path}\n\n${patch}` : patch;
+				const plus = patch.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).length;
+				const minus = patch.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).length;
+				items.push({
+					kind: "diff",
+					label: tool,
+					detail: `${path.split("/").pop() ?? "change"}  +${plus} −${minus}`,
+					text: body,
+					lines: body.split("\n").length,
+					suggestedName: `${String(++n).padStart(2, "0")}-${(path.split("/").pop() ?? "change").replace(/\.[^.]+$/, "")}.diff`,
+					isError: Boolean(m.isError),
+					prompt,
+					at,
+				});
+				continue;
+			}
+			if (!text) continue;
 			items.push({
 				kind: "tool",
 				label: tool,
@@ -283,12 +312,23 @@ class Picker implements Component {
 	invalidate(): void {}
 }
 
+/** Unified-diff colouring, using the same theme entries the transcript's diffs use. */
+function paintDiff(line: string, t: Theme): string {
+	if (/^\+\+\+|^---/.test(line)) return t.fg("dim", line);
+	if (line.startsWith("@@")) return t.fg("accent", line);
+	if (line.startsWith("+")) return t.fg("toolDiffAdded", line);
+	if (line.startsWith("-")) return t.fg("toolDiffRemoved", line);
+	if (line.startsWith("#")) return t.fg("dim", line);
+	return t.fg("toolDiffContext", line);
+}
+
 class Pager implements Component {
 	constructor(
 		private title: string,
 		private lines: string[],
 		private theme: Theme,
 		private close: () => void,
+		private paint?: (line: string, t: Theme) => string,
 	) {}
 	render(width: number): string[] {
 		const t = this.theme;
@@ -299,7 +339,7 @@ class Pager implements Component {
 		};
 		const head = truncateToWidth(this.title, Math.max(8, width - 12), "…");
 		const out = [t.fg("borderAccent", "┌─") + t.fg("accent", ` ${head} `) + t.fg("borderAccent", `${"─".repeat(Math.max(0, width - visibleWidth(head) - 5))}┐`)];
-		for (const line of this.lines) out.push(row(line));
+		for (const line of this.lines) out.push(row(this.paint ? this.paint(line, t) : line));
 		out.push(row(""), row(t.fg("dim", "esc close")));
 		out.push(t.fg("borderAccent", `└${"─".repeat(Math.max(0, width - 2))}┘`));
 		return out;
@@ -358,7 +398,11 @@ export default function (pi: ExtensionAPI): void {
 
 	async function show(ctx: ExtensionContext, item: Item): Promise<void> {
 		if (item.lines > OPEN_IN_EDITOR_LINES) return openInEditor(ctx, item);
-		await ctx.ui.custom<void>((_tui, theme, _kb, done) => new Pager(`${item.label} · ${item.lines} lines`, item.text.split("\n"), theme, done), {});
+		const title = `${item.label} · ${item.detail} · ${item.lines} lines`;
+		await ctx.ui.custom<void>(
+			(_tui, theme, _kb, done) => new Pager(title, item.text.split("\n"), theme, done, item.kind === "diff" ? paintDiff : undefined),
+			{},
+		);
 	}
 
 	pi.registerCommand("open", {
