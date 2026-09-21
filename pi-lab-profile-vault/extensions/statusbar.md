@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 1da30ce40468f7eb5660dc42202f42fff10f9d55
+source-hash: d1270e600beb45f094174cb1223c101370e3edde
 documented: 2026-09-20
 ---
 
@@ -248,6 +248,25 @@ Two non-obvious details:
 
 **Refuses when:** pi-cc has not patched `handleViewportInput`. **Off-switch:** `/hover on`.
 **Canary:** `pi-cc hover still hit-tests at the terminal width`.
+
+### The hover guard, and how it crashed a session
+
+It reinstalls itself, because pi-cc's `restoreFullscreenViewportInput` assigns the prototype method
+straight onto the instance and silently removes it. Reinstalling is also how it killed a session.
+
+An earlier version re-read `tui.handleViewportInput` on each pass and wrapped whatever it found. The
+TUI is a **lazy proxy**: it never hands back the function object you assigned, so the "is it still
+mine?" check failed every frame — visibly, as `775× installed` in a 775-frame window, which was read
+as harmless churn. It was not churn. Each frame wrapped the previous wrapper, the chain grew by one
+per frame, and the session eventually died with **Maximum call stack size exceeded**. Tagging the
+wrapper with a property did not help either: the tag cannot be read back through the proxy.
+
+The rule that actually holds: **nothing may depend on recognising our own wrapper.** pi-cc's handler
+is captured once, the wrapper is constructed once around that capture, and reinstalling is only ever
+re-assigning the same object. Wrapping a wrapper then becomes impossible rather than unlikely.
+`prof.hoverWrappers` must never exceed 1 — `/prof` prints it — and
+`tests/hover-guard.test.mjs` asserts the structure in the source, because the failure only shows up
+after thousands of frames and this invariant has now been broken twice.
 
 ## Invariants a future change must not break
 

@@ -537,7 +537,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, motionChunks: 0, hoverReinstalls: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, motionChunks: 0, hoverReinstalls: 0, hoverWrappers: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -1094,7 +1094,6 @@ export default function (pi: ExtensionAPI): void {
 	 *
 	 * /hover on forces it back for comparison; /hover off keeps it suppressed even without a column.
 	 */
-	const HOVER_HOOK = Symbol.for("pi-statusbar:hover-guard");
 	type HoverMode = "auto" | "on" | "off";
 	let hoverMode: HoverMode = (process.env.PI_HOVER as HoverMode) ?? "auto";
 	/** Every SGR packet in this chunk is motion with no button transition. */
@@ -1112,6 +1111,24 @@ export default function (pi: ExtensionAPI): void {
 	 * and route the decision through the sink so a guard installed by an earlier activation asks
 	 * the *current* one whether to suppress.
 	 */
+	/**
+	 * Keep pi-cc's hover away from motion events while the column is mounted.
+	 *
+	 * This reinstalls, because pi-cc's restoreFullscreenViewportInput assigns the prototype method
+	 * straight onto the instance and silently removes the wrapper. The reinstall is where the danger
+	 * is: an earlier version captured `tui.handleViewportInput` afresh each time and wrapped *that*,
+	 * so when the identity check failed -- and it always failed, because the TUI is a lazy proxy that
+	 * does not hand back the function object you assigned -- every frame wrapped the previous
+	 * wrapper. The chain grew by one per frame and the session died with "Maximum call stack size
+	 * exceeded". Tagging the wrapper did not help: the tag cannot be read back through the proxy
+	 * either.
+	 *
+	 * So nothing here may depend on recognising our own wrapper. pi-cc's handler is captured once,
+	 * the wrapper is built once around that capture, and reinstalling is only ever re-assigning the
+	 * same function object. Wrapping a wrapper is then impossible rather than merely unlikely, and a
+	 * reinstall costs an assignment instead of a closure. `prof.hoverWrappers` must never exceed 1;
+	 * /prof prints it, and anything else means this invariant has been broken again.
+	 */
 	function guardHover(tui: TUI): void {
 		sink.suppressHover = (data: string) => {
 			if (!onlyMotion(data)) return false; // keys, presses, releases and wheel pass straight through
@@ -1122,43 +1139,32 @@ export default function (pi: ExtensionAPI): void {
 			if (p) p.hoversDropped++;
 			return true;
 		};
-		const t = tui as unknown as {
-			[HOVER_HOOK]?: { version: number };
-			handleViewportInput?: (data: string) => unknown;
-		};
-		// pi-cc reinstalls its own handler (restoreFullscreenViewportInput assigns the prototype
-		// method straight onto the instance), which silently removes this wrapper -- measured as a
-		// live guard reporting 0 motion chunks while the hover walk ran unguarded. So re-check the
-		// identity every frame and reinstall whenever it has been replaced.
-		// The TUI is a lazy proxy, so reading the handler back does not return the same function
-		// object and an identity check reinstalls every frame (775 times in a 775-frame window).
-		// Tag the wrapper instead: it survives the proxy, it is cheap to test, and -- the point --
-		// it makes wrapping our own wrapper impossible, which an identity check could not promise.
-		const current = t.handleViewportInput as ((data: string) => unknown) & { __piHoverGuard?: boolean };
-		if (current?.__piHoverGuard) {
-			hoverGuarded = true;
-			return;
-		}
-		const piccHandler = t.handleViewportInput;
+		const t = tui as unknown as { handleViewportInput?: (data: string) => unknown };
 		const own = Object.getPrototypeOf(tui) as { handleViewportInput?: (data: string) => unknown };
-		if (typeof piccHandler !== "function" || typeof own.handleViewportInput !== "function") return;
-		if (piccHandler === own.handleViewportInput) {
-			// pi-cc has not patched this TUI. Either it is still starting up, or it no longer
-			// patches input at all -- in which case there is nothing to guard and nothing to fix.
-			compat.hoverGuard = "not applied — pi-cc has not patched handleViewportInput";
-			return; // try again next frame
+		if (typeof own.handleViewportInput !== "function") return;
+
+		if (!hoverWrapper) {
+			const piccHandler = t.handleViewportInput;
+			if (typeof piccHandler !== "function") return;
+			if (piccHandler === own.handleViewportInput) {
+				// pi-cc has not patched this TUI yet -- or no longer patches input at all, in which
+				// case there is no wrong-width hover to keep motion away from.
+				compat.hoverGuard = "not applied — pi-cc has not patched handleViewportInput";
+				return; // try again next frame
+			}
+			// Captured once and never re-read: this is the whole of the chain safety.
+			prof.hoverWrappers++;
+			hoverGuarded = true;
+			compat.hoverGuard = "active — motion kept away from pi-cc's wrong-width hit test";
+			hoverWrapper = function (this: unknown, data: string) {
+				if (sink.suppressHover?.(data)) return own.handleViewportInput?.call(this, data);
+				return piccHandler.call(this, data);
+			};
 		}
-		hoverGuarded = true;
-		compat.hoverGuard = "active — motion kept away from pi-cc's wrong-width hit test";
-		t[HOVER_HOOK] = { version: PROF_VERSION };
-		prof.hoverReinstalls++;
-		const wrapper = function (this: unknown, data: string) {
-			if (sink.suppressHover?.(data)) return own.handleViewportInput?.call(this, data);
-			return piccHandler.call(this, data);
-		} as ((data: string) => unknown) & { __piHoverGuard?: boolean };
-		wrapper.__piHoverGuard = true;
-		hoverWrapper = wrapper;
-		t.handleViewportInput = wrapper;
+		if (t.handleViewportInput !== hoverWrapper) {
+			t.handleViewportInput = hoverWrapper; // same object every time, so the chain cannot deepen
+			prof.hoverReinstalls++;
+		}
 	}
 
 	function mountSidebar(tui: TUI): void {
@@ -1531,7 +1537,8 @@ export default function (pi: ExtensionAPI): void {
 					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
 				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
 			const hov = hoverGuarded
-				? `, hover guard live (${prof.hoverReinstalls}× installed): ${prof.hoversDropped}/${prof.motionChunks} motion skipped`
+				? `, hover guard live (${prof.hoverWrappers} wrapper, ${prof.hoverReinstalls}× reinstalled): ` +
+					`${prof.hoversDropped}/${prof.motionChunks} motion skipped`
 				: ", hover guard NOT installed";
 			const text = prof.textHits + prof.textMisses
 				? `\nText cache: ${prof.textHits} hits, ${prof.textMisses} misses ` +
