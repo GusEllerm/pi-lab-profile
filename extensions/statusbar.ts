@@ -487,7 +487,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -528,6 +528,27 @@ export default function (pi: ExtensionAPI): void {
 		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: number }) | undefined;
 		if (!doc || doc.__profWrapped === PROF_VERSION) return;
 		doc.__profWrapped = PROF_VERSION;
+
+		/**
+		 * The stall is one document render that misses every per-message memo. A message's
+		 * invalidate() re-parses its markdown (AssistantMessage.invalidate -> updateContent) and
+		 * Container.invalidate cascades to every child, so a single invalidate() on the document
+		 * rebuilds the whole session. Catch the call and keep the stack: that names the caller,
+		 * which is the one thing the timings cannot.
+		 */
+		const invalidateDoc = doc.invalidate?.bind(doc);
+		doc.invalidate = () => {
+			const frames = (new Error().stack ?? "")
+				.split("\n")
+				.slice(2, 9)
+				.map((line) => line.trim().replace(/^at /, "").replace(/ \(.*$/, "").replace(/^.*\//, ""))
+				.filter((line) => line && !line.startsWith("Object.invalidate"))
+				.slice(0, 4)
+				.join(" ← ");
+			prof.invalidations.push(`${new Date().toLocaleTimeString()} ${frames}`);
+			if (prof.invalidations.length > 8) prof.invalidations.shift();
+			invalidateDoc?.();
+		};
 		const original = doc.render.bind(doc);
 		doc.render = (width: number) => {
 			const t0 = performance.now();
@@ -783,7 +804,7 @@ export default function (pi: ExtensionAPI): void {
 	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
 	 * and the current one is installed over it.
 	 */
-	const PROF_VERSION = 4;
+	const PROF_VERSION = 5;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1166,8 +1187,11 @@ export default function (pi: ExtensionAPI): void {
 				: "transcript: no renders";
 			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
 			const slow = prof.worstFrames.length ? `\nslow frames (>40ms): ${prof.worstFrames.slice(-6).join(" · ")}` : "";
+			const inval = prof.invalidations.length
+				? `\ntranscript invalidated ${prof.invalidations.length}×: ${prof.invalidations.slice(-3).join(" · ")}`
+				: "\ntranscript invalidated: never";
 			const slowDocs = prof.worstDocs.length ? `\nslow transcript renders: ${prof.worstDocs.slice(-5).join(" · ")}` : "";
-			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${inval}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1186,6 +1210,7 @@ export default function (pi: ExtensionAPI): void {
 			prof.writeMs = 0;
 			prof.worstFrames.length = 0;
 			prof.worstDocs.length = 0;
+			prof.invalidations.length = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
 		},
