@@ -70,3 +70,10 @@ document twice per frame.
 Measured, 1500-line transcript, 15 keystrokes: 40 document renders with a column beside the
 transcript, 20 without. Skipping the measure when the height is already known and the children
 are stretched would remove it.
+
+## Workaround carried in this profile
+
+`statusbar.ts` keeps motion-only input away from pi-cc's hover while the column is mounted
+(`/hover auto|on|off`), and gives pi-tui's `Text` a small per-width cache. Both are worked around
+rather than fixed: the hover still hit-tests at the wrong width whenever it does run, which is the
+part only the upstream one-liner can fix.

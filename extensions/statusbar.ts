@@ -489,7 +489,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, offWidth: [] as string[], textHits: 0, textMisses: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, offWidth: [] as string[], textHits: 0, textMisses: 0, hoversDropped: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -947,7 +947,7 @@ export default function (pi: ExtensionAPI): void {
 	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
 	 * and the current one is installed over it.
 	 */
-	const PROF_VERSION = 9;
+	const PROF_VERSION = 10;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1009,9 +1009,57 @@ export default function (pi: ExtensionAPI): void {
 			};
 	}
 
+	/**
+	 * pi-cc's fullscreen hover is both wrong and ruinous once anything shares the screen with the
+	 * transcript: it hit-tests at `tui.terminal.columns` while the transcript is laid out narrower,
+	 * so it renders the whole message tree at the wrong width on *every motion event* -- 4.2s of
+	 * accumulated child renders in one scroll window, measured -- and maps rows to the wrong
+	 * components, which is why "click to show more" lands on nothing here. Its own cache cannot
+	 * absorb it because that cache is keyed on the layout object, which pi replaces every frame.
+	 *
+	 * So while the column is mounted, motion-only input goes straight to pi's own viewport handler
+	 * and never reaches pi-cc's hover. Presses, releases and wheel events are untouched, so clicks,
+	 * selection and scrolling behave exactly as before; what is lost is a hover highlight that was
+	 * pointing at the wrong row anyway. With the column off, pi-cc is left alone -- its assumption
+	 * holds there, and this is not our code to second-guess.
+	 *
+	 * /hover on forces it back for comparison; /hover off keeps it suppressed even without a column.
+	 */
+	const HOVER_HOOK = Symbol.for("pi-statusbar:hover-guard");
+	type HoverMode = "auto" | "on" | "off";
+	let hoverMode: HoverMode = (process.env.PI_HOVER as HoverMode) ?? "auto";
+	/** Every SGR packet in this chunk is motion with no button transition. */
+	const onlyMotion = (data: string): boolean => {
+		const packets = [...data.matchAll(/\x1b\[<(\d+);\d+;\d+([Mm])/g)];
+		if (!packets.length) return false;
+		return packets.every(([, code, final]) => (Number(code) & 32) !== 0 && final === "M");
+	};
+	function guardHover(tui: TUI): void {
+		const t = tui as unknown as {
+			[HOVER_HOOK]?: { version: number; active: () => boolean };
+			handleViewportInput?: (data: string) => unknown;
+		};
+		const existing = t[HOVER_HOOK];
+		if (existing?.version === PROF_VERSION) return;
+		const piccHandler = t.handleViewportInput;
+		const own = Object.getPrototypeOf(tui) as { handleViewportInput?: (data: string) => unknown };
+		if (typeof piccHandler !== "function" || typeof own.handleViewportInput !== "function") return;
+		if (piccHandler === own.handleViewportInput) return; // pi-cc has not patched this TUI: nothing to guard
+		t[HOVER_HOOK] = { version: PROF_VERSION, active: () => hoverMode !== "on" };
+		t.handleViewportInput = function (data: string) {
+			const suppress = hoverMode === "off" || (hoverMode === "auto" && mountedTui === tui && sidebarWanted);
+			if (suppress && onlyMotion(data)) {
+				prof.hoversDropped++;
+				return own.handleViewportInput?.call(this, data); // pi's own handling, without the hover
+			}
+			return piccHandler.call(this, data);
+		};
+	}
+
 	function mountSidebar(tui: TUI): void {
 		if (!isViewportTUI(tui)) return;
 		instrumentFrames(tui);
+		guardHover(tui);
 		if (!sidebarWanted) return;
 		const viewport = tui as unknown as {
 			layoutRoot?: Component;
@@ -1309,6 +1357,26 @@ export default function (pi: ExtensionAPI): void {
 		rerender("model_select");
 	});
 
+	pi.registerCommand("hover", {
+		description: "pi-cc tool hover: /hover auto (off while the column is up) · on · off",
+		handler: async (args, ctx) => {
+			const arg = args.trim().toLowerCase();
+			if (arg === "on" || arg === "off" || arg === "auto") hoverMode = arg;
+			else if (arg) {
+				ctx.ui.notify("usage: /hover auto | on | off", "warning");
+				return;
+			}
+			const why =
+				hoverMode === "auto"
+					? "suppressed while the column is mounted: pi-cc hit-tests it at the terminal width, which is both wrong and expensive in a split layout"
+					: hoverMode === "on"
+						? "always on, including beside the column, where it mis-targets and re-renders the transcript per mouse move"
+						: "always off";
+			ctx.ui.notify(`tool hover: ${hoverMode} — ${why}`, "info");
+			rerender("hover");
+		},
+	});
+
 	pi.registerCommand("prof", {
 		description: "What the column costs: renders, cache hits and milliseconds since the last /prof",
 		handler: async (_args, ctx) => {
@@ -1336,9 +1404,10 @@ export default function (pi: ExtensionAPI): void {
 				? `\nGC pauses >15ms: ${prof.gc.slice(-6).join(" · ")} (${prof.gcMs.toFixed(0)}ms total, ` +
 					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
 				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
+			const hov = prof.hoversDropped ? `, ${prof.hoversDropped} hover walks skipped` : "";
 			const text = prof.textHits + prof.textMisses
 				? `\nText cache: ${prof.textHits} hits, ${prof.textMisses} misses ` +
-					`(${Math.round((100 * prof.textHits) / (prof.textHits + prof.textMisses))}% hit)`
+					`(${Math.round((100 * prof.textHits) / (prof.textHits + prof.textMisses))}% hit)${hov}`
 				: "";
 			const off = prof.offWidth.length
 				? `\nrendered at the wrong width: ${prof.offWidth.slice(0, 2).join(" · ")}`
@@ -1374,6 +1443,7 @@ export default function (pi: ExtensionAPI): void {
 			prof.offWidth.length = 0;
 			prof.textHits = 0;
 			prof.textMisses = 0;
+			prof.hoversDropped = 0;
 			prof.gcMs = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
