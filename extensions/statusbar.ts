@@ -489,7 +489,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, motionChunks: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -551,7 +551,7 @@ export default function (pi: ExtensionAPI): void {
 				const prof = sink.prof;
 				if (!prof) return;
 				if (d > 40) {
-					prof.worstDocs.push(`${d.toFixed(0)}ms @${width}col, ${lastDocLines} lines`);
+					prof.worstDocs.push(`${d.toFixed(0)}ms @${width}col at +${((Date.now() - profSince) / 1000).toFixed(0)}s`);
 					if (prof.worstDocs.length > 6) prof.worstDocs.shift();
 				}
 				prof.passes++;
@@ -598,6 +598,7 @@ export default function (pi: ExtensionAPI): void {
 			const c = ctxRef;
 			if (!alive(c)) return [];
 			ensureDocWrapped();
+			if (!hoverGuarded && tuiRef) guardHover(tuiRef);
 			const t0 = performance.now();
 			const key = sidebarKey(width, c);
 			const t1 = performance.now();
@@ -777,6 +778,7 @@ export default function (pi: ExtensionAPI): void {
 		lastEvent = { name, at: Date.now() };
 	};
 	let lastDocLines = 0;
+	let profSince = Date.now();
 
 	/**
 	 * Why this patch exists.
@@ -890,7 +892,7 @@ export default function (pi: ExtensionAPI): void {
 	 * of pi clears wrappers that are already installed.
 	 */
 	const SINK = Symbol.for("pi-statusbar:prof-sink");
-	type Sink = { prof?: typeof prof };
+	type Sink = { prof?: typeof prof; suppressHover?: (data: string) => boolean };
 	const sink: Sink = ((globalThis as Record<symbol, unknown>)[SINK] ??= {}) as Sink;
 	sink.prof = prof;
 	function instrumentFrames(tui: TUI): void {
@@ -978,23 +980,41 @@ export default function (pi: ExtensionAPI): void {
 		if (!packets.length) return false;
 		return packets.every(([, code, final]) => (Number(code) & 32) !== 0 && final === "M");
 	};
+	let hoverGuarded = false;
+	/**
+	 * pi-cc patches handleViewportInput on the TUI instance, and it may not have done so yet when
+	 * the column first mounts -- the first attempt at this simply gave up in that case and never
+	 * ran, which is why /prof reported no skipped walks at all. So retry until the patch appears,
+	 * and route the decision through the sink so a guard installed by an earlier activation asks
+	 * the *current* one whether to suppress.
+	 */
 	function guardHover(tui: TUI): void {
+		sink.suppressHover = (data: string) => {
+			if (!onlyMotion(data)) return false; // keys, presses, releases and wheel pass straight through
+			const p = sink.prof;
+			if (p) p.motionChunks++;
+			const suppress = hoverMode === "off" || (hoverMode === "auto" && mountedTui === tui && sidebarWanted);
+			if (!suppress) return false;
+			if (p) p.hoversDropped++;
+			return true;
+		};
+		if (hoverGuarded) return;
 		const t = tui as unknown as {
-			[HOVER_HOOK]?: { version: number; active: () => boolean };
+			[HOVER_HOOK]?: { version: number };
 			handleViewportInput?: (data: string) => unknown;
 		};
-		if (t[HOVER_HOOK]) return; // already guarded; the guard reads hoverMode live
+		if (t[HOVER_HOOK]) {
+			hoverGuarded = true; // an earlier activation installed it; it reads sink.suppressHover
+			return;
+		}
 		const piccHandler = t.handleViewportInput;
 		const own = Object.getPrototypeOf(tui) as { handleViewportInput?: (data: string) => unknown };
 		if (typeof piccHandler !== "function" || typeof own.handleViewportInput !== "function") return;
-		if (piccHandler === own.handleViewportInput) return; // pi-cc has not patched this TUI: nothing to guard
-		t[HOVER_HOOK] = { version: PROF_VERSION, active: () => hoverMode !== "on" };
+		if (piccHandler === own.handleViewportInput) return; // pi-cc has not patched yet: try again next frame
+		hoverGuarded = true;
+		t[HOVER_HOOK] = { version: PROF_VERSION };
 		t.handleViewportInput = function (data: string) {
-			const suppress = hoverMode === "off" || (hoverMode === "auto" && mountedTui === tui && sidebarWanted);
-			if (suppress && onlyMotion(data)) {
-				if (sink.prof) sink.prof.hoversDropped++;
-				return own.handleViewportInput?.call(this, data); // pi's own handling, without the hover
-			}
+			if (sink.suppressHover?.(data)) return own.handleViewportInput?.call(this, data);
 			return piccHandler.call(this, data);
 		};
 	}
@@ -1347,7 +1367,9 @@ export default function (pi: ExtensionAPI): void {
 				? `\nGC pauses >15ms: ${prof.gc.slice(-6).join(" · ")} (${prof.gcMs.toFixed(0)}ms total, ` +
 					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
 				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
-			const hov = prof.hoversDropped ? `, ${prof.hoversDropped} hover walks skipped` : "";
+			const hov = hoverGuarded
+				? `, hover guard live: ${prof.hoversDropped}/${prof.motionChunks} motion chunks skipped`
+				: ", hover guard NOT installed";
 			const text = prof.textHits + prof.textMisses
 				? `\nText cache: ${prof.textHits} hits, ${prof.textMisses} misses ` +
 					`(${Math.round((100 * prof.textHits) / (prof.textHits + prof.textMisses))}% hit)${hov}`
@@ -1376,6 +1398,8 @@ export default function (pi: ExtensionAPI): void {
 			prof.textHits = 0;
 			prof.textMisses = 0;
 			prof.hoversDropped = 0;
+			prof.motionChunks = 0;
+			profSince = Date.now();
 			prof.gcMs = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
