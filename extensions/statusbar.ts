@@ -488,7 +488,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, offWidth: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -555,6 +555,24 @@ export default function (pi: ExtensionAPI): void {
 				const name = child.constructor?.name ?? "anonymous";
 				const renderChild = c.render.bind(c);
 				c.render = (w: number) => {
+					/**
+					 * pi-tui's Text holds a single-entry cache keyed on (text, width), so one render
+					 * at another width evicts every message's lines and the next render at the real
+					 * width rebuilds the whole session -- a full re-render with no invalidate() and
+					 * no change in output, which is exactly the stall. The document is only ever
+					 * rendered at one width, so whatever poisons the caches reaches the messages
+					 * directly. Catch it here, with the stack, the first few times.
+					 */
+					if (lastDocWidth && w !== lastDocWidth && prof.offWidth.length < 4) {
+						const where = (new Error().stack ?? "")
+							.split("\n")
+							.slice(2, 10)
+							.map((line) => line.trim().replace(/^at /, "").replace(/ \(.*$/, "").replace(/^.*\//, ""))
+							.filter((line) => line && !line.startsWith("c.render"))
+							.slice(0, 5)
+							.join(" ← ");
+						prof.offWidth.push(`${name} at ${w} (doc is ${lastDocWidth}): ${where}`);
+					}
 					const t0 = performance.now();
 					try {
 						return renderChild(w);
@@ -588,6 +606,7 @@ export default function (pi: ExtensionAPI): void {
 			try {
 				result = original(width);
 				lastDocLines = result?.length ?? 0;
+				lastDocWidth = width;
 				return result;
 			} finally {
 				const d = performance.now() - t0;
@@ -829,6 +848,7 @@ export default function (pi: ExtensionAPI): void {
 		lastEvent = { name, at: Date.now() };
 	};
 	let lastDocLines = 0;
+	let lastDocWidth = 0;
 
 	/**
 	 * The stall renders identical content at an identical width with no invalidation, so nothing
@@ -871,7 +891,7 @@ export default function (pi: ExtensionAPI): void {
 	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
 	 * and the current one is installed over it.
 	 */
-	const PROF_VERSION = 7;
+	const PROF_VERSION = 8;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1260,12 +1280,15 @@ export default function (pi: ExtensionAPI): void {
 				? `\nGC pauses >15ms: ${prof.gc.slice(-6).join(" · ")} (${prof.gcMs.toFixed(0)}ms total, ` +
 					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
 				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
+			const off = prof.offWidth.length
+				? `\nrendered at the wrong width: ${prof.offWidth.slice(0, 2).join(" · ")}`
+				: "\nwrong-width renders: none seen";
 			const who = prof.culprits.length ? `\nslow render spent it in: ${prof.culprits.slice(-3).join(" · ")}` : "";
 			const inval = prof.invalidations.length
 				? `\ntranscript invalidated ${prof.invalidations.length}×: ${prof.invalidations.slice(-3).join(" · ")}`
 				: "\ntranscript invalidated: never";
 			const slowDocs = prof.worstDocs.length ? `\nslow transcript renders: ${prof.worstDocs.slice(-5).join(" · ")}` : "";
-			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${who}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${who}${off}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1288,6 +1311,7 @@ export default function (pi: ExtensionAPI): void {
 			prof.gc.length = 0;
 			prof.culprits.length = 0;
 			prof.timedKids = 0;
+			prof.offWidth.length = 0;
 			prof.gcMs = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
