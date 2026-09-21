@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: d0e8bd008abc7d7e1ff88e2d5bf20b8053885dca
+source-hash: 1da30ce40468f7eb5660dc42202f42fff10f9d55
 documented: 2026-09-20
 ---
 
@@ -106,3 +106,6 @@ workaround should be deleted**, not repaired. They skip cleanly where pi is not 
 passes without it.
 
 Verified against pi-coding-agent 0.86.1, pi-tui 0.86.1, pi-cc-extensions 0.8.71.
+
+(The `source-hash` here tracks `extensions/statusbar.ts`, which carries all three patches, so this
+note goes stale whenever that file changes for any reason — re-read the patches, then `--fix`.)

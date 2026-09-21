@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: d0e8bd008abc7d7e1ff88e2d5bf20b8053885dca
+source-hash: 1da30ce40468f7eb5660dc42202f42fff10f9d55
 documented: 2026-09-20
 ---
 
@@ -80,7 +80,31 @@ not generation speed, and the dashboard says so rather than quietly reporting a 
 ### The column
 
 `drawSidebar(width, ctx)` builds the lines; `sidebar` is the `Component` wrapper that memoises
-them. `section()` inside `drawSidebar` handles the two layouts: label-and-value on one row, or
+them.
+
+**Section order is deliberate** (Sept 2026 redesign, from a screenshot where 45% of the column was
+empty and `USAGE` truncated): `CONTEXT` leads, because it is the only section with a deadline
+attached; `AGENTS` follows and expands only while agents run; the static `MODEL` and `ENDPOINT` sit
+below; then `ROUND` (only once a round has started), `USAGE`, `TOTAL`, `OTHER`.
+
+`CONTEXT` reports **remaining** rather than just the percentage (`92.1% · 19k left`), and carries a
+trajectory: `ContextTrail` keeps a minute of once-a-second samples and yields `rate()` in tokens per
+minute and `spark(width)` as a block-character sparkline. The spark is normalised to *its own
+window's* min and max, not to the context size — at 92% every bar would otherwise be full, which is
+precisely when the shape matters. A `full in ~N min` line appears when the rate implies one. A flat
+or shrinking context (after a compaction) yields no rate and therefore no countdown. Tested in
+`tests/context-trail.test.mjs`, which slices the class out of this file the way
+`tests/paint-diff.test.mjs` does.
+
+`AGENTS` renders rows from the `agents` slot's `details()` — read in the *body*, never the key. Idle,
+it holds its position with one dim `none running` line so the column does not reshuffle when a round
+starts.
+
+**The command hints are anchored to the bottom row**, so slack in a tall column sits between the
+sections and the hints. The anchor needs the height of the *band* the column occupies, which is not
+the `vp.height` the stack's `visible()` hook reports — that is the whole viewport, dock included, and
+anchoring to it puts the hints below the fold. The transcript `ScrollView` is laid out in exactly
+this band, so `scrollRef.viewportHeight` supplies it, falling back to `rowHeight`. `section()` inside `drawSidebar` handles the two layouts: label-and-value on one row, or
 label on its own line when the column is narrower than `SIDEBAR_COMPACT_BELOW` (30).
 `sidebarWidthFor()` maps terminal width to column width (36/32/28/24 by bracket).
 

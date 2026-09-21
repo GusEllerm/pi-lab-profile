@@ -215,6 +215,53 @@ function speedText(s: Speed): { text: string; live: boolean } | undefined {
 	return undefined;
 }
 
+
+/**
+ * A minute of context-usage samples, for the trajectory under CONTEXT.
+ *
+ * At 92% the level is not the interesting number -- the slope is. One sample a second for sixty
+ * seconds is enough to draw a shape and estimate a burn rate, and small enough that nothing needs
+ * to think about it. Sampled from the column's own once-a-second cache miss rather than on a timer,
+ * so it cannot outlive the activation.
+ */
+const SPARK = "▁▂▃▄▅▆▇█";
+class ContextTrail {
+	private samples: { at: number; used: number }[] = [];
+
+	sample(used: number): void {
+		const now = Date.now();
+		const last = this.samples[this.samples.length - 1];
+		if (last && now - last.at < 900) return;
+		this.samples.push({ at: now, used });
+		if (this.samples.length > 60) this.samples.shift();
+	}
+
+	/** Tokens per minute over the window, or undefined until there is enough to divide by. */
+	rate(): number | undefined {
+		const [first] = this.samples;
+		const last = this.samples[this.samples.length - 1];
+		if (!first || !last || last.at - first.at < 5000) return undefined;
+		const perMs = (last.used - first.used) / (last.at - first.at);
+		return perMs > 0 ? perMs * 60_000 : undefined;
+	}
+
+	/**
+	 * Normalised to the window's own min and max, not to the context size: at 92% every bar would
+	 * otherwise be full, which is exactly when the shape matters most.
+	 */
+	spark(width: number): string {
+		if (this.samples.length < 3 || width < 4) return "";
+		const points = this.samples.slice(-width);
+		const values = points.map((p) => p.used);
+		const low = Math.min(...values);
+		const high = Math.max(...values);
+		const span = high - low;
+		return points
+			.map((p) => SPARK[span === 0 ? 0 : Math.min(7, Math.floor(((p.used - low) / span) * 7.999))])
+			.join("");
+	}
+}
+
 /** Read-only overlay: sections of rows with a label gutter. Esc/Enter/q close; e, a run commands. */
 class Dashboard implements Component {
 	constructor(
@@ -255,6 +302,7 @@ export default function (pi: ExtensionAPI): void {
 	let usage: Usage = { prompt: 0, cacheRead: 0, output: 0, calls: 0, cost: 0 };
 	let statusesRef: ReadonlyMap<string, string> = new Map();
 	const speed = new SpeedMeter();
+	const trail = new ContextTrail();
 	let lastSpeedRender = 0;
 	let enabled = true;
 
@@ -670,6 +718,40 @@ export default function (pi: ExtensionAPI): void {
 				return out;
 			}
 
+			// Context leads: it is the only section with a deadline attached, and at 90% it is the
+			// only one worth reading first. Everything static sits below it.
+			const u = c.getContextUsage();
+			const pct = u?.percent;
+			const window = u?.contextWindow ?? c.model?.contextWindow ?? 0;
+			const ctxState: SlotState | undefined = pct == null ? undefined : pct >= 90 ? "error" : pct >= 75 ? "warn" : undefined;
+			const filled = Math.round(((pct ?? 0) / 100) * valueWidth);
+			const barColor: Color = ctxState === "error" ? "error" : ctxState === "warn" ? "warning" : "accent";
+			const used = pct != null && window ? (pct / 100) * window : undefined;
+			if (used !== undefined) trail.sample(used);
+			const left = used !== undefined && window ? Math.max(0, window - used) : undefined;
+			const rate = trail.rate();
+			// How long the remaining context lasts at the current burn: the actionable form of 92%.
+			const minutesLeft = rate && left !== undefined ? left / rate : undefined;
+			const spark = trail.spark(Math.min(12, valueWidth - 10));
+			section("CONTEXT", ctxState, [
+				`${pct == null ? "?" : `${pct.toFixed(1)}%`}${left === undefined ? "" : ` · ${fmt(left)} left`}`,
+				t.fg(barColor, "█".repeat(filled)) + t.fg("borderMuted", "░".repeat(Math.max(0, valueWidth - filled))),
+				...(spark && rate ? [`${t.fg("borderAccent", spark)}  ${t.fg("dim", `${fmt(rate)}/min`)}`] : []),
+				...(minutesLeft !== undefined && minutesLeft < 600
+					? [t.fg(ctxState === "error" ? "error" : "dim", `full in ~${minutesLeft < 1 ? "<1" : Math.round(minutesLeft)} min`)]
+					: []),
+			]);
+
+			// Agents next, and only expanded while they are doing something: idle, one dim line holds
+			// the position so the column does not reshuffle when a round starts.
+			const ag = slots.get("agents");
+			const agentRows = ag?.details?.() ?? [];
+			const running = agentRows.filter((row) => row.includes("●")).length;
+			section("AGENTS", running ? "busy" : undefined, [
+				running ? `${running} running` : t.fg("dim", "none running"),
+				...(running ? agentRows.slice(0, 3).map((row) => t.fg("dim", row.replace(/^[●✓] /, ""))) : []),
+			]);
+
 			const ep = slots.get("endpoint");
 			const host = (() => {
 				try {
@@ -678,21 +760,11 @@ export default function (pi: ExtensionAPI): void {
 					return "";
 				}
 			})();
-			section("ENDPOINT", ep?.state, [t.fg("text", ep?.text ?? "?"), t.fg("dim", host)]);
 			section("MODEL", undefined, [
 				t.fg("text", c.model?.id ?? "no model"),
 				t.fg("dim", c.model?.reasoning ? `thinking ${pi.getThinkingLevel()}` : "no thinking"),
 			]);
-
-			const u = c.getContextUsage();
-			const pct = u?.percent;
-			const ctxState: SlotState | undefined = pct == null ? undefined : pct >= 90 ? "error" : pct >= 75 ? "warn" : undefined;
-			const filled = Math.round(((pct ?? 0) / 100) * valueWidth);
-			const barColor: Color = ctxState === "error" ? "error" : ctxState === "warn" ? "warning" : "accent";
-			section("CONTEXT", ctxState, [
-				`${pct == null ? "?" : `${pct.toFixed(1)}%`} of ${fmt(u?.contextWindow ?? c.model?.contextWindow ?? 0)}`,
-				t.fg(barColor, "█".repeat(filled)) + t.fg("borderMuted", "░".repeat(Math.max(0, valueWidth - filled))),
-			]);
+			section("ENDPOINT", ep?.state, [t.fg("text", ep?.text ?? "?"), t.fg("dim", host)]);
 
 			const img = slots.get("images");
 			section("IMAGES", img?.state === "warn" ? "warn" : undefined, [
@@ -713,7 +785,7 @@ export default function (pi: ExtensionAPI): void {
 			const sessionTokens = usage.prompt + usage.output;
 			section("USAGE", undefined, [
 				`in ${fmt(usage.prompt)} · out ${fmt(usage.output)}`,
-				t.fg("dim", `${cache}${usage.calls} call${usage.calls === 1 ? "" : "s"}`),
+				t.fg("dim", `${cache}${fmt(usage.calls)} call${usage.calls === 1 ? "" : "s"}`),
 				...(sp ? [sp.live ? t.fg("accent", sp.text) : t.fg("dim", sp.text)] : []),
 			]);
 			section("TOTAL", undefined, [
@@ -731,13 +803,23 @@ export default function (pi: ExtensionAPI): void {
 				const next = [...hints, cmd].join("  ");
 				if (next.length <= inner) hints.push(cmd);
 			}
-			if (hints.length) lines.push(t.fg("dim", hints.join("  ")));
-
-			// divider down the full height of the row (height comes from the stack's visible() hook)
-			const height = Math.max(lines.length, rowHeight);
+			// Anchored to the last row rather than pushed after the content, so the slack in a tall
+			// column sits between the sections and the hints instead of below everything.
+			//
+			// The anchor needs the height of the *band* the column occupies, which is not the
+			// viewport height the stack's visible() hook reports -- that is the whole screen, dock
+			// included, and anchoring to it puts the hints a few rows below the fold. The transcript
+			// ScrollView beside us is laid out in exactly this band and publishes its own
+			// viewportHeight, so ask it, and fall back to the viewport if it is not mounted yet.
+			const hintLine = hints.length ? t.fg("dim", hints.join("  ")) : "";
+			while (lines.length && lines[lines.length - 1] === "") lines.pop();
+			const band = (scrollRef as { viewportHeight?: number } | undefined)?.viewportHeight || rowHeight;
+			const anchor = hintLine ? Math.max(lines.length + 1, band - 1) : -1;
+			const height = Math.max(lines.length, anchor + 1, band);
 			const out: string[] = [];
 			for (let i = 0; i < height; i++) {
-				const cell = truncateToWidth(lines[i] ?? "", inner, "…");
+				const source = i === anchor ? hintLine : (lines[i] ?? "");
+				const cell = truncateToWidth(source, inner, "…");
 				out.push(`${t.fg("borderMuted", "│")}  ${cell}${" ".repeat(Math.max(0, inner - visibleWidth(cell)))}`);
 			}
 			return out;
