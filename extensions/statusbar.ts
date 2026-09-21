@@ -268,6 +268,7 @@ export default function (pi: ExtensionAPI): void {
 		rerender("statusbar:transcript");
 	});
 	pi.events.on("statusbar:attached", (data) => {
+		noteEvent("attached");
 		attached = (data as { name?: string; stats?: () => AttachedStats } | undefined)?.name
 			? (data as { name: string; stats: () => AttachedStats })
 			: undefined;
@@ -275,6 +276,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.events.on("statusbar:slot", (data) => {
+		noteEvent("slot");
 		const slot = data as Slot;
 		if (!slot?.id) return;
 		slots.set(slot.id, slot);
@@ -485,7 +487,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -529,10 +531,21 @@ export default function (pi: ExtensionAPI): void {
 		const original = doc.render.bind(doc);
 		doc.render = (width: number) => {
 			const t0 = performance.now();
+			let result: string[] | undefined;
 			try {
-				return original(width);
+				result = original(width);
+				lastDocLines = result?.length ?? 0;
+				return result;
 			} finally {
 				const d = performance.now() - t0;
+				if (d > 40) {
+					const lines = (result?.length ?? 0) as number;
+					prof.worstDocs.push(
+						`${d.toFixed(0)}ms @${width}col, ${lines} lines (${lines === lastDocLines ? "same" : `was ${lastDocLines}`}), ` +
+							`${Date.now() - lastEvent.at}ms after ${lastEvent.name}`,
+					);
+					if (prof.worstDocs.length > 12) prof.worstDocs.shift();
+				}
 				prof.passes++;
 				prof.passMs += d;
 				prof.widths.set(width, (prof.widths.get(width) ?? 0) + 1);
@@ -745,6 +758,18 @@ export default function (pi: ExtensionAPI): void {
 	 * keep profiling the one part that is already cheap. Instance-patched, once per TUI, with the
 	 * counters repointed on reload rather than the wrapper re-applied.
 	 */
+	/**
+	 * A single document render of 136.7ms inside a 149ms frame, with 104 others at 0.7ms, says
+	 * pi-cc's per-message memo is being thrown away wholesale rather than the document being
+	 * expensive. So note what happened immediately before each slow render: if every stall follows
+	 * the same event, that event is the invalidation.
+	 */
+	let lastEvent = { name: "none", at: 0 };
+	const noteEvent = (name: string) => {
+		lastEvent = { name, at: Date.now() };
+	};
+	let lastDocLines = 0;
+
 	/** Accounting for the frame currently being drawn; the mean frame is fine, the tail is not. */
 	let frame = { bytes: 0, rows: 0, writeMs: 0, full: false };
 	const FRAME_HOOK = Symbol.for("pi-statusbar:frame-hook");
@@ -758,7 +783,7 @@ export default function (pi: ExtensionAPI): void {
 	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
 	 * and the current one is installed over it.
 	 */
-	const PROF_VERSION = 3;
+	const PROF_VERSION = 4;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1038,6 +1063,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// what you just asked, caught as you send it
 	pi.on("input", (event) => {
+		noteEvent("input");
 		const text = (event as { text?: string })?.text?.trim();
 		if (!text || text.startsWith("/")) return undefined; // a command is not a question to be reminded of
 		pinnedPrompt = text;
@@ -1083,17 +1109,21 @@ export default function (pi: ExtensionAPI): void {
 	});
 	// message_end fires before Pi appends the message to the session, so re-sum once the turn is stored
 	pi.on("turn_end", (_event, ctx) => {
+		noteEvent("turn_end");
 		usage = sumUsage(ctx);
 		rerender("turn_end");
 	});
 	pi.on("agent_end", (_event, ctx) => {
+		noteEvent("agent_end");
 		usage = sumUsage(ctx);
 		rerender("agent_end");
 	});
 	pi.on("message_start", (event) => {
+		noteEvent("message_start");
 		if ((event.message as { role?: string })?.role === "assistant") speed.start();
 	});
 	pi.on("message_update", (event) => {
+		noteEvent("message_update");
 		const m = event.message as { role?: string };
 		if (m?.role !== "assistant") return;
 		speed.update(event.message as never);
@@ -1104,10 +1134,14 @@ export default function (pi: ExtensionAPI): void {
 		}
 	});
 	pi.on("message_end", (event) => {
+		noteEvent("message_end");
 		if ((event.message as { role?: string })?.role === "assistant") speed.end(event.message as never);
 		rerender("message_end");
 	});
-	pi.on("model_select", () => rerender("model_select"));
+	pi.on("model_select", () => {
+		noteEvent("model_select");
+		rerender("model_select");
+	});
 
 	pi.registerCommand("prof", {
 		description: "What the column costs: renders, cache hits and milliseconds since the last /prof",
@@ -1132,7 +1166,8 @@ export default function (pi: ExtensionAPI): void {
 				: "transcript: no renders";
 			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
 			const slow = prof.worstFrames.length ? `\nslow frames (>40ms): ${prof.worstFrames.slice(-6).join(" · ")}` : "";
-			ctx.ui.notify(`${frames}${wire}${slow}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			const slowDocs = prof.worstDocs.length ? `\nslow transcript renders: ${prof.worstDocs.slice(-5).join(" · ")}` : "";
+			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1150,6 +1185,7 @@ export default function (pi: ExtensionAPI): void {
 			prof.rows = 0;
 			prof.writeMs = 0;
 			prof.worstFrames.length = 0;
+			prof.worstDocs.length = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
 		},
