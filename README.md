@@ -128,6 +128,23 @@ PI_CODING_AGENT_DIR=/tmp/pi-clean pi install git:github.com/GusEllerm/pi-lab-pro
 PI_CODING_AGENT_DIR=/tmp/pi-clean pi
 ```
 
+## Documentation
+
+`pi-lab-profile-vault/` is an Obsidian vault holding the cross-session memory for this project: one
+note per extension, the reverse-engineered internals of pi/pi-tui/pi-cc that several extensions
+depend on, and the investigations behind the less obvious code. Start at `00-start-here.md`.
+
+Every note that documents a source file records that file's git blob hash, so drift is detectable
+rather than assumed:
+
+```bash
+bash scripts/check-docs.sh          # ok / STALE per note, with the diff command to run
+bash scripts/check-docs.sh --fix    # re-record hashes once a note has been brought up to date
+```
+
+`STALE` means the code moved under the note, not that the note is wrong — read the diff before
+trusting the prose.
+
 ## License
 
 MIT.
