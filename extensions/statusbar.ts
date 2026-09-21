@@ -44,6 +44,7 @@ import {
 	isViewportTUI,
 	matchesKey,
 	ScrollView,
+	Text,
 	type TUI,
 	truncateToWidth,
 	type TuiMouseEvent,
@@ -488,7 +489,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, offWidth: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, offWidth: [] as string[], textHits: 0, textMisses: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -851,6 +852,61 @@ export default function (pi: ExtensionAPI): void {
 	let lastDocWidth = 0;
 
 	/**
+	 * Why this patch exists.
+	 *
+	 * pi-tui's Text caches exactly one (text, width) pair. pi-cc's fullscreen hover hit-test takes
+	 * its width from `tui.terminal.columns` rather than from the layout box it just hit, so with a
+	 * sidebar it walks the message tree rendering at the full terminal width while the transcript
+	 * is laid out narrower. Every motion event therefore evicts every cached line in the session,
+	 * and the next frame rebuilds all of it: measured here as a deterministic ~130ms freeze, on top
+	 * of ~130ms for the hover's own walk, every time the mouse moves after a frame. pi-cc's own
+	 * hover cache cannot absorb it either, because it is keyed on the layout object and pi replaces
+	 * that every frame.
+	 *
+	 * Without a sidebar the two widths are equal and none of this happens, so the bug is ours to
+	 * work around: keep a few widths per Text instead of one. Both widths then hit, neither evicts
+	 * the other, and the stall disappears without changing what anything renders.
+	 *
+	 * This does not fix pi-cc's hit-testing, which still maps rows using the wrong width -- that is
+	 * the same bug behind "click to show more" landing on nothing, and it needs the one-line fix
+	 * upstream (`hit.box.rect.width`). Set PI_TEXT_CACHE=off to skip the patch.
+	 */
+	const TEXT_PATCH = Symbol.for("pi-statusbar:text-width-cache");
+	type CachedText = { text: string; bg: unknown; lines: string[] };
+	function patchTextWidthCache(): void {
+		if (process.env.PI_TEXT_CACHE === "off") return;
+		const proto = Text.prototype as unknown as {
+			[TEXT_PATCH]?: boolean;
+			render(width: number): string[];
+			invalidate?: () => void;
+		};
+		if (proto[TEXT_PATCH]) return;
+		proto[TEXT_PATCH] = true;
+		const renderText = proto.render;
+		proto.render = function (this: Text & { __widthCache?: Map<number, CachedText> }, width: number) {
+			const store = (this.__widthCache ??= new Map<number, CachedText>());
+			const self = this as unknown as { text: string; customBgFn: unknown };
+			const hit = store.get(width);
+			if (hit && hit.text === self.text && hit.bg === self.customBgFn) {
+				prof.textHits++;
+				return hit.lines;
+			}
+			prof.textMisses++;
+			const lines = renderText.call(this, width);
+			store.set(width, { text: self.text, bg: self.customBgFn, lines });
+			// two widths is the normal case (transcript and hover); keep a little slack, no more
+			if (store.size > 4) store.delete(store.keys().next().value as number);
+			return lines;
+		};
+		const invalidateText = proto.invalidate;
+		proto.invalidate = function (this: Text & { __widthCache?: Map<number, CachedText> }) {
+			this.__widthCache?.clear();
+			invalidateText?.call(this);
+		};
+	}
+	patchTextWidthCache();
+
+	/**
 	 * The stall renders identical content at an identical width with no invalidation, so nothing
 	 * about the work changed -- which leaves the runtime. Container.render concatenates all ~2850
 	 * document lines into a fresh array every frame, so scrolling allocates tens of MB/s and V8 has
@@ -891,7 +947,7 @@ export default function (pi: ExtensionAPI): void {
 	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
 	 * and the current one is installed over it.
 	 */
-	const PROF_VERSION = 8;
+	const PROF_VERSION = 9;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1280,6 +1336,10 @@ export default function (pi: ExtensionAPI): void {
 				? `\nGC pauses >15ms: ${prof.gc.slice(-6).join(" · ")} (${prof.gcMs.toFixed(0)}ms total, ` +
 					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
 				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
+			const text = prof.textHits + prof.textMisses
+				? `\nText cache: ${prof.textHits} hits, ${prof.textMisses} misses ` +
+					`(${Math.round((100 * prof.textHits) / (prof.textHits + prof.textMisses))}% hit)`
+				: "";
 			const off = prof.offWidth.length
 				? `\nrendered at the wrong width: ${prof.offWidth.slice(0, 2).join(" · ")}`
 				: "\nwrong-width renders: none seen";
@@ -1288,7 +1348,7 @@ export default function (pi: ExtensionAPI): void {
 				? `\ntranscript invalidated ${prof.invalidations.length}×: ${prof.invalidations.slice(-3).join(" · ")}`
 				: "\ntranscript invalidated: never";
 			const slowDocs = prof.worstDocs.length ? `\nslow transcript renders: ${prof.worstDocs.slice(-5).join(" · ")}` : "";
-			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${who}${off}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${who}${off}${text}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1312,6 +1372,8 @@ export default function (pi: ExtensionAPI): void {
 			prof.culprits.length = 0;
 			prof.timedKids = 0;
 			prof.offWidth.length = 0;
+			prof.textHits = 0;
+			prof.textMisses = 0;
 			prof.gcMs = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
