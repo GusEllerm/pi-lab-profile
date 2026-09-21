@@ -77,3 +77,22 @@ are stretched would remove it.
 (`/hover auto|on|off`), and gives pi-tui's `Text` a small per-width cache. Both are worked around
 rather than fixed: the hover still hit-tests at the wrong width whenever it does run, which is the
 part only the upstream one-liner can fix.
+
+## Keeping the workarounds honest
+
+Each patch states the shape it depends on and refuses to apply when that shape is not there, so a
+workaround that no longer fits brings back a known bug that `/prof` names rather than quietly
+rendering the wrong thing. `/compat` reports what is active and why:
+
+```
+text cache: active — one cache entry per width
+hover guard: active — motion kept away from pi-cc's wrong-width hit test
+measure stub: active — hstack measures the transcript for a height it then stretches
+```
+
+Switches: `PI_TEXT_CACHE=off`, `PI_MEASURE_STUB=off`, `/hover on`.
+
+`tests/upstream-assumptions.test.mjs` asserts that each upstream bug is **still present**. When one
+is fixed, its test fails, and that failure is the signal to delete the matching workaround. The
+Text probe is also checked at runtime: if pi-tui starts caching more than one width, the patch
+retires itself.

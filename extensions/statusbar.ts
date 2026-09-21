@@ -800,12 +800,49 @@ export default function (pi: ExtensionAPI): void {
 	 * the same bug behind "click to show more" landing on nothing, and it needs the one-line fix
 	 * upstream (`hit.box.rect.width`). Set PI_TEXT_CACHE=off to skip the patch.
 	 */
+	/**
+	 * Every patch below reaches into someone else's code, so each one states the shape it depends
+	 * on and refuses to apply when that shape is not there. A workaround that stops working should
+	 * bring back a known bug that /prof names, never quietly render the wrong thing.
+	 */
+	const compat: Record<string, string> = {};
+
 	const TEXT_PATCH = Symbol.for("pi-statusbar:text-width-cache");
 	type CachedText = { text: string; bg: string; lines: string[] };
 	/** Identity is useless for a closure rebuilt per render; its source is stable and cheap enough. */
 	const bgKey = (fn: unknown): string => (typeof fn === "function" ? fn.toString() : String(fn));
+	/**
+	 * Confirm pi-tui's Text still looks the way this patch assumes: a render that returns lines, a
+	 * `text` field the cache can key on, and its own single-entry cache (rendering at a second
+	 * width must evict the first). If upstream fixes that cache, this probe fails, the patch is
+	 * skipped, and /compat says why -- the workaround retires itself rather than fighting the fix.
+	 */
+	function textPatchApplies(): string | undefined {
+		try {
+			const probe = new Text("probe text") as Text & { text?: string };
+			const first = probe.render(20);
+			if (!Array.isArray(first) || first.length === 0) return "Text.render did not return lines";
+			if (typeof probe.text !== "string") return "Text has no `text` field to key on";
+			if (probe.render(20) !== first) return "Text no longer returns its cached array";
+			probe.render(14);
+			if (probe.render(20) === first) return "Text now caches more than one width (upstream fixed)";
+			return undefined;
+		} catch (error) {
+			return `probe threw: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
+
 	function patchTextWidthCache(): void {
-		if (process.env.PI_TEXT_CACHE === "off") return;
+		if (process.env.PI_TEXT_CACHE === "off") {
+			compat.textCache = "off (PI_TEXT_CACHE=off)";
+			return;
+		}
+		const why = textPatchApplies();
+		if (why) {
+			compat.textCache = `not applied — ${why}`;
+			return;
+		}
+		compat.textCache = "active — one cache entry per width";
 		const proto = Text.prototype as unknown as {
 			[TEXT_PATCH]?: boolean;
 			render(width: number): string[];
@@ -1023,8 +1060,14 @@ export default function (pi: ExtensionAPI): void {
 		const piccHandler = t.handleViewportInput;
 		const own = Object.getPrototypeOf(tui) as { handleViewportInput?: (data: string) => unknown };
 		if (typeof piccHandler !== "function" || typeof own.handleViewportInput !== "function") return;
-		if (piccHandler === own.handleViewportInput) return; // pi-cc has not patched yet: try again next frame
+		if (piccHandler === own.handleViewportInput) {
+			// pi-cc has not patched this TUI. Either it is still starting up, or it no longer
+			// patches input at all -- in which case there is nothing to guard and nothing to fix.
+			compat.hoverGuard = "not applied — pi-cc has not patched handleViewportInput";
+			return; // try again next frame
+		}
 		hoverGuarded = true;
+		compat.hoverGuard = "active — motion kept away from pi-cc's wrong-width hit test";
 		t[HOVER_HOOK] = { version: PROF_VERSION };
 		prof.hoverReinstalls++;
 		const wrapper = function (this: unknown, data: string) {
@@ -1092,9 +1135,18 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	let stubbedPane: Component | undefined;
 	function stubMeasureRender(component: Component | undefined): void {
+		if (process.env.PI_MEASURE_STUB === "off") {
+			compat.measureStub = "off (PI_MEASURE_STUB=off)";
+			return;
+		}
 		const sv = component as (Component & { __measureStub?: boolean }) | undefined;
 		if (stubbedPane && stubbedPane !== sv) restoreMeasureRender(stubbedPane); // attach/detach swaps the pane
-		if (!sv || !(sv instanceof ScrollView) || sv.__measureStub) return;
+		if (!sv || !(sv instanceof ScrollView)) {
+			compat.measureStub = "not applied — the transcript pane is not a ScrollView";
+			return;
+		}
+		if (sv.__measureStub) return;
+		compat.measureStub = "active — hstack measures the transcript for a height it then stretches";
 		stubbedPane = sv;
 		sv.__measureStub = true;
 		Object.defineProperty(sv, "render", {
@@ -1335,6 +1387,18 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("model_select", () => {
 		noteEvent("model_select");
 		rerender("model_select");
+	});
+
+	pi.registerCommand("compat", {
+		description: "Which upstream workarounds are active, and why — see docs/upstream-hover-width.md",
+		handler: async (_args, ctx) => {
+			const rows = [
+				["text cache", compat.textCache ?? "not reached"],
+				["hover guard", compat.hoverGuard ?? "not reached"],
+				["measure stub", compat.measureStub ?? "not reached (no split layout)"],
+			];
+			ctx.ui.notify(rows.map(([name, state]) => `${name}: ${state}`).join("\n"), "info");
+		},
 	});
 
 	pi.registerCommand("hover", {
