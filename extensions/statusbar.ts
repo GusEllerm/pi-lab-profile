@@ -1011,7 +1011,15 @@ export default function (pi: ExtensionAPI): void {
 		// method straight onto the instance), which silently removes this wrapper -- measured as a
 		// live guard reporting 0 motion chunks while the hover walk ran unguarded. So re-check the
 		// identity every frame and reinstall whenever it has been replaced.
-		if (hoverWrapper && t.handleViewportInput === hoverWrapper) return;
+		// The TUI is a lazy proxy, so reading the handler back does not return the same function
+		// object and an identity check reinstalls every frame (775 times in a 775-frame window).
+		// Tag the wrapper instead: it survives the proxy, it is cheap to test, and -- the point --
+		// it makes wrapping our own wrapper impossible, which an identity check could not promise.
+		const current = t.handleViewportInput as ((data: string) => unknown) & { __piHoverGuard?: boolean };
+		if (current?.__piHoverGuard) {
+			hoverGuarded = true;
+			return;
+		}
 		const piccHandler = t.handleViewportInput;
 		const own = Object.getPrototypeOf(tui) as { handleViewportInput?: (data: string) => unknown };
 		if (typeof piccHandler !== "function" || typeof own.handleViewportInput !== "function") return;
@@ -1019,11 +1027,13 @@ export default function (pi: ExtensionAPI): void {
 		hoverGuarded = true;
 		t[HOVER_HOOK] = { version: PROF_VERSION };
 		prof.hoverReinstalls++;
-		hoverWrapper = function (this: unknown, data: string) {
+		const wrapper = function (this: unknown, data: string) {
 			if (sink.suppressHover?.(data)) return own.handleViewportInput?.call(this, data);
 			return piccHandler.call(this, data);
-		};
-		t.handleViewportInput = hoverWrapper;
+		} as ((data: string) => unknown) & { __piHoverGuard?: boolean };
+		wrapper.__piHoverGuard = true;
+		hoverWrapper = wrapper;
+		t.handleViewportInput = wrapper;
 	}
 
 	function mountSidebar(tui: TUI): void {
