@@ -488,7 +488,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -537,6 +537,35 @@ export default function (pi: ExtensionAPI): void {
 		 * rebuilds the whole session. Catch the call and keep the stack: that names the caller,
 		 * which is the one thing the timings cannot.
 		 */
+		/**
+		 * The stall is deterministic -- 129ms, 2846 lines, same width, twice over -- so it is real
+		 * work by one component, not a pause. The document is a Container of message components and
+		 * Container.render calls every child, so time the children and the slow render names its own
+		 * culprit. Two levels deep: the document holds a chat container, which holds the messages.
+		 */
+		const timed = Symbol.for("pi-statusbar:child-timer");
+		const childMs = new Map<string, number>();
+		const wrapChildren = (parent: Component, depth: number): void => {
+			if (depth > 2) return;
+			for (const child of ((parent as { children?: Component[] }).children ?? [])) {
+				const c = child as Component & { [timed]?: number };
+				wrapChildren(child, depth + 1);
+				if (c[timed] === PROF_VERSION) continue;
+				c[timed] = PROF_VERSION;
+				const name = child.constructor?.name ?? "anonymous";
+				const renderChild = c.render.bind(c);
+				c.render = (w: number) => {
+					const t0 = performance.now();
+					try {
+						return renderChild(w);
+					} finally {
+						childMs.set(name, (childMs.get(name) ?? 0) + (performance.now() - t0));
+					prof.timedKids = childMs.size;
+					}
+				};
+			}
+		};
+
 		const invalidateDoc = doc.invalidate?.bind(doc);
 		doc.invalidate = () => {
 			const frames = (new Error().stack ?? "")
@@ -552,6 +581,8 @@ export default function (pi: ExtensionAPI): void {
 		};
 		const original = doc.render.bind(doc);
 		doc.render = (width: number) => {
+			wrapChildren(doc, 0); // messages arrive over time, so pick up any new ones
+			childMs.clear();
 			const t0 = performance.now();
 			let result: string[] | undefined;
 			try {
@@ -561,6 +592,13 @@ export default function (pi: ExtensionAPI): void {
 			} finally {
 				const d = performance.now() - t0;
 				if (d > 40) {
+					const top = [...childMs.entries()]
+						.sort((a, b) => b[1] - a[1])
+						.slice(0, 4)
+						.map(([name, ms]) => `${name} ${ms.toFixed(0)}ms`)
+						.join(", ");
+					prof.culprits.push(top || "no child accounted for it");
+					if (prof.culprits.length > 6) prof.culprits.shift();
 					const lines = (result?.length ?? 0) as number;
 					prof.worstDocs.push(
 						`${d.toFixed(0)}ms @${width}col, ${lines} lines (${lines === lastDocLines ? "same" : `was ${lastDocLines}`}), ` +
@@ -833,7 +871,7 @@ export default function (pi: ExtensionAPI): void {
 	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
 	 * and the current one is installed over it.
 	 */
-	const PROF_VERSION = 6;
+	const PROF_VERSION = 7;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1214,7 +1252,7 @@ export default function (pi: ExtensionAPI): void {
 				: "";
 			const layout = passes
 				? `transcript: ${passes} renders (${[...prof.widths.entries()].map(([w, n]) => `${n}@${w}col`).join(" + ")}), ` +
-					`${(passMs / passes).toFixed(1)}ms each, worst ${passWorst.toFixed(1)}ms`
+					`${(passMs / passes).toFixed(1)}ms each, worst ${passWorst.toFixed(1)}ms, ${prof.timedKids} child kinds timed`
 				: "transcript: no renders";
 			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
 			const slow = prof.worstFrames.length ? `\nslow frames (>40ms): ${prof.worstFrames.slice(-6).join(" · ")}` : "";
@@ -1222,11 +1260,12 @@ export default function (pi: ExtensionAPI): void {
 				? `\nGC pauses >15ms: ${prof.gc.slice(-6).join(" · ")} (${prof.gcMs.toFixed(0)}ms total, ` +
 					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
 				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
+			const who = prof.culprits.length ? `\nslow render spent it in: ${prof.culprits.slice(-3).join(" · ")}` : "";
 			const inval = prof.invalidations.length
 				? `\ntranscript invalidated ${prof.invalidations.length}×: ${prof.invalidations.slice(-3).join(" · ")}`
 				: "\ntranscript invalidated: never";
 			const slowDocs = prof.worstDocs.length ? `\nslow transcript renders: ${prof.worstDocs.slice(-5).join(" · ")}` : "";
-			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${who}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1247,6 +1286,8 @@ export default function (pi: ExtensionAPI): void {
 			prof.worstDocs.length = 0;
 			prof.invalidations.length = 0;
 			prof.gc.length = 0;
+			prof.culprits.length = 0;
+			prof.timedKids = 0;
 			prof.gcMs = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
