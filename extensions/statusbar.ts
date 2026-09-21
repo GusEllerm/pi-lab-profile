@@ -506,7 +506,7 @@ export default function (pi: ExtensionAPI): void {
 	let scrollRef: (Component & { child?: Component; component?: Component }) | undefined;
 	function ensureDocWrapped(): void {
 		const doc = scrollRef?.child ?? scrollRef?.component;
-		if (doc && !(doc as { __profWrapped?: boolean }).__profWrapped) instrumentTranscript(undefined);
+		if (doc && (doc as { __profWrapped?: number }).__profWrapped !== PROF_VERSION) instrumentTranscript(undefined);
 	}
 
 	function instrumentTranscript(root: Component | undefined): void {
@@ -523,9 +523,9 @@ export default function (pi: ExtensionAPI): void {
 		// object as `component`, which is what renderCached() calls render() on.
 		scrollRef = (find(root, 0) as (Component & { child?: Component; component?: Component }) | undefined) ?? scrollRef;
 		const scroll = scrollRef;
-		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: boolean }) | undefined;
-		if (!doc || doc.__profWrapped) return;
-		doc.__profWrapped = true;
+		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: number }) | undefined;
+		if (!doc || doc.__profWrapped === PROF_VERSION) return;
+		doc.__profWrapped = PROF_VERSION;
 		const original = doc.render.bind(doc);
 		doc.render = (width: number) => {
 			const t0 = performance.now();
@@ -748,7 +748,17 @@ export default function (pi: ExtensionAPI): void {
 	/** Accounting for the frame currently being drawn; the mean frame is fine, the tail is not. */
 	let frame = { bytes: 0, rows: 0, writeMs: 0, full: false };
 	const FRAME_HOOK = Symbol.for("pi-statusbar:frame-hook");
-	type FrameHook = { prof?: typeof prof };
+	type FrameHook = { prof?: typeof prof; version?: number };
+	/**
+	 * Bump when the instrumentation changes shape. These wrappers live on objects that outlive the
+	 * activation -- the TUI, the transcript document -- so after /reload the *previous build's*
+	 * wrapper is still the one running. It keeps incrementing the fields it knew about and silently
+	 * skips the ones added since, which is how /prof reported a 144ms worst frame with no slow-frame
+	 * record and "write 0% of frame time" while happily counting bytes. A version tag makes a stale
+	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
+	 * and the current one is installed over it.
+	 */
+	const PROF_VERSION = 3;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -756,11 +766,12 @@ export default function (pi: ExtensionAPI): void {
 			terminal?: { write(text: string): unknown };
 		};
 		const existing = t[FRAME_HOOK];
-		if (existing) {
-			existing.prof = prof; // a reload: keep the one wrapper, point it at the live counters
+		if (existing?.version === PROF_VERSION) {
+			existing.prof = prof; // same build after a reload: keep the wrapper, repoint the counters
 			return;
 		}
-		const hook: FrameHook = { prof };
+		if (existing) existing.prof = undefined; // older build's wrapper: silence it, then wrap over it
+		const hook: FrameHook = { prof, version: PROF_VERSION };
 		t[FRAME_HOOK] = hook;
 		const renderFrame = t.doRender?.bind(tui);
 		if (renderFrame)
