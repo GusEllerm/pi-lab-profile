@@ -489,7 +489,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, motionChunks: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, motionChunks: 0, hoverReinstalls: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -598,7 +598,7 @@ export default function (pi: ExtensionAPI): void {
 			const c = ctxRef;
 			if (!alive(c)) return [];
 			ensureDocWrapped();
-			if (!hoverGuarded && tuiRef) guardHover(tuiRef);
+			if (tuiRef) guardHover(tuiRef); // cheap identity check; pi-cc keeps replacing the handler
 			const t0 = performance.now();
 			const key = sidebarKey(width, c);
 			const t1 = performance.now();
@@ -801,7 +801,9 @@ export default function (pi: ExtensionAPI): void {
 	 * upstream (`hit.box.rect.width`). Set PI_TEXT_CACHE=off to skip the patch.
 	 */
 	const TEXT_PATCH = Symbol.for("pi-statusbar:text-width-cache");
-	type CachedText = { text: string; bg: unknown; lines: string[] };
+	type CachedText = { text: string; bg: string; lines: string[] };
+	/** Identity is useless for a closure rebuilt per render; its source is stable and cheap enough. */
+	const bgKey = (fn: unknown): string => (typeof fn === "function" ? fn.toString() : String(fn));
 	function patchTextWidthCache(): void {
 		if (process.env.PI_TEXT_CACHE === "off") return;
 		const proto = Text.prototype as unknown as {
@@ -816,13 +818,15 @@ export default function (pi: ExtensionAPI): void {
 			const store = (this.__widthCache ??= new Map<number, CachedText>());
 			const self = this as unknown as { text: string; customBgFn: unknown };
 			const hit = store.get(width);
-			if (hit && hit.text === self.text && hit.bg === self.customBgFn) {
+			// The bg function is compared by source, not identity: pi-cc builds a new closure per
+			// render for hover highlighting, and keying on identity made every such Text miss.
+			if (hit && hit.text === self.text && hit.bg === bgKey(self.customBgFn)) {
 				if (sink.prof) sink.prof.textHits++;
 				return hit.lines;
 			}
 			if (sink.prof) sink.prof.textMisses++;
 			const lines = renderText.call(this, width);
-			store.set(width, { text: self.text, bg: self.customBgFn, lines });
+			store.set(width, { text: self.text, bg: bgKey(self.customBgFn), lines });
 			// two widths is the normal case (transcript and hover); keep a little slack, no more
 			if (store.size > 4) store.delete(store.keys().next().value as number);
 			return lines;
@@ -981,6 +985,7 @@ export default function (pi: ExtensionAPI): void {
 		return packets.every(([, code, final]) => (Number(code) & 32) !== 0 && final === "M");
 	};
 	let hoverGuarded = false;
+	let hoverWrapper: ((data: string) => unknown) | undefined;
 	/**
 	 * pi-cc patches handleViewportInput on the TUI instance, and it may not have done so yet when
 	 * the column first mounts -- the first attempt at this simply gave up in that case and never
@@ -998,25 +1003,27 @@ export default function (pi: ExtensionAPI): void {
 			if (p) p.hoversDropped++;
 			return true;
 		};
-		if (hoverGuarded) return;
 		const t = tui as unknown as {
 			[HOVER_HOOK]?: { version: number };
 			handleViewportInput?: (data: string) => unknown;
 		};
-		if (t[HOVER_HOOK]) {
-			hoverGuarded = true; // an earlier activation installed it; it reads sink.suppressHover
-			return;
-		}
+		// pi-cc reinstalls its own handler (restoreFullscreenViewportInput assigns the prototype
+		// method straight onto the instance), which silently removes this wrapper -- measured as a
+		// live guard reporting 0 motion chunks while the hover walk ran unguarded. So re-check the
+		// identity every frame and reinstall whenever it has been replaced.
+		if (hoverWrapper && t.handleViewportInput === hoverWrapper) return;
 		const piccHandler = t.handleViewportInput;
 		const own = Object.getPrototypeOf(tui) as { handleViewportInput?: (data: string) => unknown };
 		if (typeof piccHandler !== "function" || typeof own.handleViewportInput !== "function") return;
 		if (piccHandler === own.handleViewportInput) return; // pi-cc has not patched yet: try again next frame
 		hoverGuarded = true;
 		t[HOVER_HOOK] = { version: PROF_VERSION };
-		t.handleViewportInput = function (data: string) {
+		prof.hoverReinstalls++;
+		hoverWrapper = function (this: unknown, data: string) {
 			if (sink.suppressHover?.(data)) return own.handleViewportInput?.call(this, data);
 			return piccHandler.call(this, data);
 		};
+		t.handleViewportInput = hoverWrapper;
 	}
 
 	function mountSidebar(tui: TUI): void {
@@ -1368,7 +1375,7 @@ export default function (pi: ExtensionAPI): void {
 					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
 				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
 			const hov = hoverGuarded
-				? `, hover guard live: ${prof.hoversDropped}/${prof.motionChunks} motion chunks skipped`
+				? `, hover guard live (${prof.hoverReinstalls}× installed): ${prof.hoversDropped}/${prof.motionChunks} motion skipped`
 				: ", hover guard NOT installed";
 			const text = prof.textHits + prof.textMisses
 				? `\nText cache: ${prof.textHits} hits, ${prof.textMisses} misses ` +
@@ -1399,6 +1406,7 @@ export default function (pi: ExtensionAPI): void {
 			prof.textMisses = 0;
 			prof.hoversDropped = 0;
 			prof.motionChunks = 0;
+			prof.hoverReinstalls = 0;
 			profSince = Date.now();
 			prof.gcMs = 0;
 			prof.colBytes = 0;
