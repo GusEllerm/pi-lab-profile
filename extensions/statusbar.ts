@@ -489,7 +489,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, culprits: [] as string[], timedKids: 0, offWidth: [] as string[], textHits: 0, textMisses: 0, hoversDropped: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -510,7 +510,7 @@ export default function (pi: ExtensionAPI): void {
 	let scrollRef: (Component & { child?: Component; component?: Component }) | undefined;
 	function ensureDocWrapped(): void {
 		const doc = scrollRef?.child ?? scrollRef?.component;
-		if (doc && (doc as { __profWrapped?: number }).__profWrapped !== PROF_VERSION) instrumentTranscript(undefined);
+		if (doc && !(doc as { __profWrapped?: boolean }).__profWrapped) instrumentTranscript(undefined);
 	}
 
 	function instrumentTranscript(root: Component | undefined): void {
@@ -527,9 +527,9 @@ export default function (pi: ExtensionAPI): void {
 		// object as `component`, which is what renderCached() calls render() on.
 		scrollRef = (find(root, 0) as (Component & { child?: Component; component?: Component }) | undefined) ?? scrollRef;
 		const scroll = scrollRef;
-		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: number }) | undefined;
-		if (!doc || doc.__profWrapped === PROF_VERSION) return;
-		doc.__profWrapped = PROF_VERSION;
+		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: boolean }) | undefined;
+		if (!doc || doc.__profWrapped) return;
+		doc.__profWrapped = true;
 
 		/**
 		 * The stall is one document render that misses every per-message memo. A message's
@@ -538,93 +538,21 @@ export default function (pi: ExtensionAPI): void {
 		 * rebuilds the whole session. Catch the call and keep the stack: that names the caller,
 		 * which is the one thing the timings cannot.
 		 */
-		/**
-		 * The stall is deterministic -- 129ms, 2846 lines, same width, twice over -- so it is real
-		 * work by one component, not a pause. The document is a Container of message components and
-		 * Container.render calls every child, so time the children and the slow render names its own
-		 * culprit. Two levels deep: the document holds a chat container, which holds the messages.
-		 */
-		const timed = Symbol.for("pi-statusbar:child-timer");
-		const childMs = new Map<string, number>();
-		const wrapChildren = (parent: Component, depth: number): void => {
-			if (depth > 2) return;
-			for (const child of ((parent as { children?: Component[] }).children ?? [])) {
-				const c = child as Component & { [timed]?: number };
-				wrapChildren(child, depth + 1);
-				if (c[timed] === PROF_VERSION) continue;
-				c[timed] = PROF_VERSION;
-				const name = child.constructor?.name ?? "anonymous";
-				const renderChild = c.render.bind(c);
-				c.render = (w: number) => {
-					/**
-					 * pi-tui's Text holds a single-entry cache keyed on (text, width), so one render
-					 * at another width evicts every message's lines and the next render at the real
-					 * width rebuilds the whole session -- a full re-render with no invalidate() and
-					 * no change in output, which is exactly the stall. The document is only ever
-					 * rendered at one width, so whatever poisons the caches reaches the messages
-					 * directly. Catch it here, with the stack, the first few times.
-					 */
-					if (lastDocWidth && w !== lastDocWidth && prof.offWidth.length < 4) {
-						const where = (new Error().stack ?? "")
-							.split("\n")
-							.slice(2, 10)
-							.map((line) => line.trim().replace(/^at /, "").replace(/ \(.*$/, "").replace(/^.*\//, ""))
-							.filter((line) => line && !line.startsWith("c.render"))
-							.slice(0, 5)
-							.join(" ← ");
-						prof.offWidth.push(`${name} at ${w} (doc is ${lastDocWidth}): ${where}`);
-					}
-					const t0 = performance.now();
-					try {
-						return renderChild(w);
-					} finally {
-						childMs.set(name, (childMs.get(name) ?? 0) + (performance.now() - t0));
-					prof.timedKids = childMs.size;
-					}
-				};
-			}
-		};
-
-		const invalidateDoc = doc.invalidate?.bind(doc);
-		doc.invalidate = () => {
-			const frames = (new Error().stack ?? "")
-				.split("\n")
-				.slice(2, 9)
-				.map((line) => line.trim().replace(/^at /, "").replace(/ \(.*$/, "").replace(/^.*\//, ""))
-				.filter((line) => line && !line.startsWith("Object.invalidate"))
-				.slice(0, 4)
-				.join(" ← ");
-			prof.invalidations.push(`${new Date().toLocaleTimeString()} ${frames}`);
-			if (prof.invalidations.length > 8) prof.invalidations.shift();
-			invalidateDoc?.();
-		};
 		const original = doc.render.bind(doc);
 		doc.render = (width: number) => {
-			wrapChildren(doc, 0); // messages arrive over time, so pick up any new ones
-			childMs.clear();
 			const t0 = performance.now();
 			let result: string[] | undefined;
 			try {
 				result = original(width);
 				lastDocLines = result?.length ?? 0;
-				lastDocWidth = width;
 				return result;
 			} finally {
 				const d = performance.now() - t0;
+				const prof = sink.prof;
+				if (!prof) return;
 				if (d > 40) {
-					const top = [...childMs.entries()]
-						.sort((a, b) => b[1] - a[1])
-						.slice(0, 4)
-						.map(([name, ms]) => `${name} ${ms.toFixed(0)}ms`)
-						.join(", ");
-					prof.culprits.push(top || "no child accounted for it");
-					if (prof.culprits.length > 6) prof.culprits.shift();
-					const lines = (result?.length ?? 0) as number;
-					prof.worstDocs.push(
-						`${d.toFixed(0)}ms @${width}col, ${lines} lines (${lines === lastDocLines ? "same" : `was ${lastDocLines}`}), ` +
-							`${Date.now() - lastEvent.at}ms after ${lastEvent.name}`,
-					);
-					if (prof.worstDocs.length > 12) prof.worstDocs.shift();
+					prof.worstDocs.push(`${d.toFixed(0)}ms @${width}col, ${lastDocLines} lines`);
+					if (prof.worstDocs.length > 6) prof.worstDocs.shift();
 				}
 				prof.passes++;
 				prof.passMs += d;
@@ -849,7 +777,6 @@ export default function (pi: ExtensionAPI): void {
 		lastEvent = { name, at: Date.now() };
 	};
 	let lastDocLines = 0;
-	let lastDocWidth = 0;
 
 	/**
 	 * Why this patch exists.
@@ -888,10 +815,10 @@ export default function (pi: ExtensionAPI): void {
 			const self = this as unknown as { text: string; customBgFn: unknown };
 			const hit = store.get(width);
 			if (hit && hit.text === self.text && hit.bg === self.customBgFn) {
-				prof.textHits++;
+				if (sink.prof) sink.prof.textHits++;
 				return hit.lines;
 			}
-			prof.textMisses++;
+			if (sink.prof) sink.prof.textMisses++;
 			const lines = renderText.call(this, width);
 			store.set(width, { text: self.text, bg: self.customBgFn, lines });
 			// two widths is the normal case (transcript and hover); keep a little slack, no more
@@ -948,6 +875,24 @@ export default function (pi: ExtensionAPI): void {
 	 * and the current one is installed over it.
 	 */
 	const PROF_VERSION = 10;
+
+	/**
+	 * Every wrapper below lives on an object that outlives this activation -- the TUI, the
+	 * transcript document, Text.prototype -- so it must be installed at most once, ever, and must
+	 * never hold a direct reference to this activation's counters. Versioning the wrappers was the
+	 * wrong answer: a reload with a new version stacked another wrapper over the old one, four
+	 * reloads put every component behind four nested timers, and the instrumentation became the
+	 * thing being measured (61.6ms a render against 2.1ms before it).
+	 *
+	 * So: wrap once, unconditionally, and route the counters through a shared sink that each
+	 * activation repoints at its own `prof`. A wrapper from an older build keeps working and keeps
+	 * writing somewhere live; it simply will not know about fields added later. Only a full restart
+	 * of pi clears wrappers that are already installed.
+	 */
+	const SINK = Symbol.for("pi-statusbar:prof-sink");
+	type Sink = { prof?: typeof prof };
+	const sink: Sink = ((globalThis as Record<symbol, unknown>)[SINK] ??= {}) as Sink;
+	sink.prof = prof;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -955,11 +900,10 @@ export default function (pi: ExtensionAPI): void {
 			terminal?: { write(text: string): unknown };
 		};
 		const existing = t[FRAME_HOOK];
-		if (existing?.version === PROF_VERSION) {
-			existing.prof = prof; // same build after a reload: keep the wrapper, repoint the counters
+		if (existing) {
+			existing.prof = prof; // one wrapper per TUI, ever: just point it at the live counters
 			return;
 		}
-		if (existing) existing.prof = undefined; // older build's wrapper: silence it, then wrap over it
 		const hook: FrameHook = { prof, version: PROF_VERSION };
 		t[FRAME_HOOK] = hook;
 		const renderFrame = t.doRender?.bind(tui);
@@ -1039,8 +983,7 @@ export default function (pi: ExtensionAPI): void {
 			[HOVER_HOOK]?: { version: number; active: () => boolean };
 			handleViewportInput?: (data: string) => unknown;
 		};
-		const existing = t[HOVER_HOOK];
-		if (existing?.version === PROF_VERSION) return;
+		if (t[HOVER_HOOK]) return; // already guarded; the guard reads hoverMode live
 		const piccHandler = t.handleViewportInput;
 		const own = Object.getPrototypeOf(tui) as { handleViewportInput?: (data: string) => unknown };
 		if (typeof piccHandler !== "function" || typeof own.handleViewportInput !== "function") return;
@@ -1049,7 +992,7 @@ export default function (pi: ExtensionAPI): void {
 		t.handleViewportInput = function (data: string) {
 			const suppress = hoverMode === "off" || (hoverMode === "auto" && mountedTui === tui && sidebarWanted);
 			if (suppress && onlyMotion(data)) {
-				prof.hoversDropped++;
+				if (sink.prof) sink.prof.hoversDropped++;
 				return own.handleViewportInput?.call(this, data); // pi's own handling, without the hover
 			}
 			return piccHandler.call(this, data);
@@ -1396,7 +1339,7 @@ export default function (pi: ExtensionAPI): void {
 				: "";
 			const layout = passes
 				? `transcript: ${passes} renders (${[...prof.widths.entries()].map(([w, n]) => `${n}@${w}col`).join(" + ")}), ` +
-					`${(passMs / passes).toFixed(1)}ms each, worst ${passWorst.toFixed(1)}ms, ${prof.timedKids} child kinds timed`
+					`${(passMs / passes).toFixed(1)}ms each, worst ${passWorst.toFixed(1)}ms`
 				: "transcript: no renders";
 			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
 			const slow = prof.worstFrames.length ? `\nslow frames (>40ms): ${prof.worstFrames.slice(-6).join(" · ")}` : "";
@@ -1409,15 +1352,8 @@ export default function (pi: ExtensionAPI): void {
 				? `\nText cache: ${prof.textHits} hits, ${prof.textMisses} misses ` +
 					`(${Math.round((100 * prof.textHits) / (prof.textHits + prof.textMisses))}% hit)${hov}`
 				: "";
-			const off = prof.offWidth.length
-				? `\nrendered at the wrong width: ${prof.offWidth.slice(0, 2).join(" · ")}`
-				: "\nwrong-width renders: none seen";
-			const who = prof.culprits.length ? `\nslow render spent it in: ${prof.culprits.slice(-3).join(" · ")}` : "";
-			const inval = prof.invalidations.length
-				? `\ntranscript invalidated ${prof.invalidations.length}×: ${prof.invalidations.slice(-3).join(" · ")}`
-				: "\ntranscript invalidated: never";
 			const slowDocs = prof.worstDocs.length ? `\nslow transcript renders: ${prof.worstDocs.slice(-5).join(" · ")}` : "";
-			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${who}${off}${text}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${text}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1436,11 +1372,7 @@ export default function (pi: ExtensionAPI): void {
 			prof.writeMs = 0;
 			prof.worstFrames.length = 0;
 			prof.worstDocs.length = 0;
-			prof.invalidations.length = 0;
 			prof.gc.length = 0;
-			prof.culprits.length = 0;
-			prof.timedKids = 0;
-			prof.offWidth.length = 0;
 			prof.textHits = 0;
 			prof.textMisses = 0;
 			prof.hoversDropped = 0;
