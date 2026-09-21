@@ -36,6 +36,7 @@
  * setLayoutRoot is wrapped so the sidebar re-attaches whenever Pi installs a fresh root.
  */
 import { homedir } from "node:os";
+import { PerformanceObserver } from "node:perf_hooks";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
@@ -487,7 +488,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], invalidations: [] as string[], gc: [] as string[], gcMs: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -791,6 +792,34 @@ export default function (pi: ExtensionAPI): void {
 	};
 	let lastDocLines = 0;
 
+	/**
+	 * The stall renders identical content at an identical width with no invalidation, so nothing
+	 * about the work changed -- which leaves the runtime. Container.render concatenates all ~2850
+	 * document lines into a fresh array every frame, so scrolling allocates tens of MB/s and V8 has
+	 * to collect eventually. A collection that lands inside a render is indistinguishable from a
+	 * slow render unless you ask V8, so ask it.
+	 *
+	 * GC kinds are V8's: 1 scavenge (young), 2 mark-sweep-compact (major), 4 incremental, 8 weak
+	 * callbacks. Which one it is decides the fix -- a major pause is not tunable from the outside,
+	 * while a scavenge storm usually is, via a bigger young generation.
+	 */
+	const GC_KIND: Record<number, string> = { 1: "scavenge", 2: "MAJOR", 4: "incremental", 8: "weakcb" };
+	let gcObserver: PerformanceObserver | undefined;
+	try {
+		gcObserver = new PerformanceObserver((list) => {
+			for (const entry of list.getEntries()) {
+				prof.gcMs += entry.duration;
+				if (entry.duration < 15) continue; // a pause this short is not what anyone feels
+				const kind = (entry.detail as { kind?: number } | undefined)?.kind;
+				prof.gc.push(`${entry.duration.toFixed(0)}ms ${GC_KIND[kind ?? 0] ?? `kind ${kind}`}`);
+				if (prof.gc.length > 12) prof.gc.shift();
+			}
+		});
+		gcObserver.observe({ entryTypes: ["gc"] });
+	} catch {
+		gcObserver = undefined; // no GC timings available: /prof simply will not mention them
+	}
+
 	/** Accounting for the frame currently being drawn; the mean frame is fine, the tail is not. */
 	let frame = { bytes: 0, rows: 0, writeMs: 0, full: false };
 	const FRAME_HOOK = Symbol.for("pi-statusbar:frame-hook");
@@ -804,7 +833,7 @@ export default function (pi: ExtensionAPI): void {
 	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
 	 * and the current one is installed over it.
 	 */
-	const PROF_VERSION = 5;
+	const PROF_VERSION = 6;
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1073,6 +1102,8 @@ export default function (pi: ExtensionAPI): void {
 	// mount, leaving a dead sidebar on screen that crashes the next layout pass.
 	pi.on("session_shutdown", () => {
 		dead = true;
+		gcObserver?.disconnect(); // a live observer would outlive this activation and leak per reload
+		gcObserver = undefined;
 		if (resizeTimer) {
 			clearTimeout(resizeTimer);
 			resizeTimer = undefined;
@@ -1187,11 +1218,15 @@ export default function (pi: ExtensionAPI): void {
 				: "transcript: no renders";
 			const asks = [...prof.asks.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", ");
 			const slow = prof.worstFrames.length ? `\nslow frames (>40ms): ${prof.worstFrames.slice(-6).join(" · ")}` : "";
+			const gc = prof.gc.length
+				? `\nGC pauses >15ms: ${prof.gc.slice(-6).join(" · ")} (${prof.gcMs.toFixed(0)}ms total, ` +
+					`${(100 * prof.gcMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time)`
+				: `\nGC: nothing over 15ms (${prof.gcMs.toFixed(0)}ms total)`;
 			const inval = prof.invalidations.length
 				? `\ntranscript invalidated ${prof.invalidations.length}×: ${prof.invalidations.slice(-3).join(" · ")}`
 				: "\ntranscript invalidated: never";
 			const slowDocs = prof.worstDocs.length ? `\nslow transcript renders: ${prof.worstDocs.slice(-5).join(" · ")}` : "";
-			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${inval}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
+			ctx.ui.notify(`${frames}${wire}${slow}${slowDocs}${inval}${gc}\n${layout}\n${column} · asked for: ${asks || "none"}`, "info");
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
@@ -1211,6 +1246,8 @@ export default function (pi: ExtensionAPI): void {
 			prof.worstFrames.length = 0;
 			prof.worstDocs.length = 0;
 			prof.invalidations.length = 0;
+			prof.gc.length = 0;
+			prof.gcMs = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;
 		},
