@@ -1,6 +1,6 @@
 ---
 source: extensions/outputs.ts
-source-hash: 9f2d0628163d2c61b737f2485bf09d086a5bc92e
+source-hash: a3c759eb3505b02ae2d3cf49479a7c8772e1911a
 documented: 2026-09-20
 ---
 
@@ -165,6 +165,20 @@ true })` and takes the first that exists.
 it, so the editor window outlives the command and you keep working in the terminal. With no editor
 found it just notifies the path; an editor that fails to start notifies the path too. Nothing is
 ever left without the user being told where the file is.
+
+### 22 Sept 2026 review fixes
+
+- `$EDITOR` set to a terminal editor (`vim`, `nano`, …) was spawned detached with no TTY, so nothing
+  opened while the user was told `→ vim`. Known terminal editors now get "Wrote <file> — open it from
+  another shell"; GUI editors are still launched (M9).
+- `session_shutdown` no longer deletes the handoff directory on a `/reload` (`event.reason ===
+  "reload"`): it is per pid and the next activation reuses it, and editors still had the files open
+  (M10). On a crash the directory leaks; on a genuine exit it is removed.
+- `?? "change"` / `?? "file"` / `?? "written.txt"` could never fire (`"".split("/").pop()` is `""`,
+  not `undefined`), so names came out as `NN-.diff`; they are `||` now. `PI_OPEN_EDITOR_LINES=""`
+  gave 0 and a non-number gave `NaN` (silently inverting behaviour); knobs are finite-or-default.
+  `collect()` treats a non-array `content` as empty instead of throwing and emptying the picker; the
+  child-process `error` listener — the one continuation here the host does not catch — is guarded.
 
 ## Invariants a future change must not break
 

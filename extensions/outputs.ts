@@ -17,9 +17,17 @@ import { spawn, spawnSync } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-const OPEN_IN_EDITOR_LINES = Number(process.env.PI_OPEN_EDITOR_LINES ?? 40);
+/** A knob is a positive finite number or it is the default; "" and "lots" used to become 0 and NaN. */
+const knob = (raw: string | undefined, fallback: number): number => {
+	const n = Number(raw);
+	return raw !== undefined && Number.isFinite(n) && n > 0 ? n : fallback;
+};
+const TERMINAL_EDITORS = new Set(["vi", "vim", "nvim", "nano", "pico", "emacs", "micro", "hx", "helix", "joe", "ne", "ed", "kak"]);
+/** Session entries carry content as a string or an array of blocks; anything else is treated as empty. */
+const blocks = (content: unknown): any[] => (Array.isArray(content) ? content : []);
+const OPEN_IN_EDITOR_LINES = knob(process.env.PI_OPEN_EDITOR_LINES, 40);
 const MAX_ENTRIES = 40; // the picker is for finding something recent, not browsing all of history
-const MIN_THINKING_CHARS = Number(process.env.PI_OPEN_MIN_THINKING ?? 200);
+const MIN_THINKING_CHARS = knob(process.env.PI_OPEN_MIN_THINKING, 200);
 
 type Item = {
 	kind: "tool" | "thinking" | "bash" | "diff";
@@ -83,13 +91,13 @@ function collect(ctx: ExtensionContext): Item[] {
 		const at = entry.timestamp ? Date.parse(entry.timestamp) : undefined;
 
 		if (m.role === "user") {
-			const text = typeof m.content === "string" ? m.content : ((m.content ?? []) as any[]).filter((c) => c?.type === "text").map((c) => c.text).join(" ");
+			const text = typeof m.content === "string" ? m.content : blocks(m.content).filter((c) => c?.type === "text").map((c) => c.text).join(" ");
 			if (text?.trim() && !text.trim().startsWith("/")) prompt = oneLine(text.trim(), 70);
 			continue;
 		}
 
 		if (m.role === "assistant") {
-			for (const part of (m.content ?? []) as any[]) {
+			for (const part of blocks(m.content)) {
 				if (part?.type === "toolCall" && part.id) calls.set(part.id, { name: part.name, args: part.arguments ?? {} });
 				// A one-line "Should add a docstring to the get method" is readable where it already is;
 				// listing every such aside buries the things worth reopening.
@@ -128,7 +136,7 @@ function collect(ctx: ExtensionContext): Item[] {
 		}
 
 		if (m.role === "toolResult") {
-			const text = (typeof m.content === "string" ? m.content : ((m.content ?? []) as any[]).map((c) => c?.text ?? "").join("\n")).trim();
+			const text = (typeof m.content === "string" ? m.content : blocks(m.content).map((c) => c?.text ?? "").join("\n")).trim();
 			const call = m.toolCallId ? calls.get(m.toolCallId) : undefined;
 			const tool = m.toolName ?? call?.name ?? "tool";
 
@@ -147,10 +155,10 @@ function collect(ctx: ExtensionContext): Item[] {
 				items.push({
 					kind: "diff",
 					label: tool,
-					detail: `${path.split("/").pop() ?? "change"}  +${plus} −${minus}`,
+					detail: `${path.split("/").pop() || "change"}  +${plus} −${minus}`,
 					text: body,
 					lines: body.split("\n").length,
-					suggestedName: `${String(++n).padStart(2, "0")}-${(path.split("/").pop() ?? "change").replace(/\.[^.]+$/, "")}.diff`,
+					suggestedName: `${String(++n).padStart(2, "0")}-${(path.split("/").pop() || "change").replace(/\.[^.]+$/, "")}.diff`,
 					isError: Boolean(m.isError),
 					prompt,
 					at,
@@ -168,10 +176,10 @@ function collect(ctx: ExtensionContext): Item[] {
 				items.push({
 					kind: "tool",
 					label: "write",
-					detail: `${path.split("/").pop() ?? "file"}  ${body.split("\n").length} lines written`,
+					detail: `${path.split("/").pop() || "file"}  ${body.split("\n").length} lines written`,
 					text: body,
 					lines: body.split("\n").length,
-					suggestedName: `${String(++n).padStart(2, "0")}-${path.split("/").pop() ?? "written.txt"}`,
+					suggestedName: `${String(++n).padStart(2, "0")}-${path.split("/").pop() || "written.txt"}`,
 					isError: Boolean(m.isError),
 					prompt,
 					at,
@@ -380,7 +388,10 @@ export default function (pi: ExtensionAPI): void {
 	const dir = join(tmpdir(), `pi-open-${process.pid}`);
 	let dirMade = false;
 
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", (event) => {
+		// The directory is per pid, and the next activation reuses it: deleting it on a reload pulls
+		// files out from under editors that still have them open.
+		if ((event as { reason?: string } | undefined)?.reason === "reload") return;
 		try {
 			if (dirMade) rmSync(dir, { recursive: true, force: true });
 		} catch {
@@ -409,8 +420,20 @@ export default function (pi: ExtensionAPI): void {
 			writeFileSync(file, item.text.endsWith("\n") ? item.text : `${item.text}\n`);
 			const cmd = editorCommand();
 			if (!cmd) return ctx.ui.notify(`Wrote ${file} — set $EDITOR to open it automatically.`, "info");
+			// A terminal editor needs this terminal, which pi owns; spawned detached with no TTY it
+			// opens nothing while the user is told it did. Hand them the path instead.
+			if (TERMINAL_EDITORS.has(cmd[0].split("/").pop() ?? cmd[0])) {
+				return ctx.ui.notify(`Wrote ${file} — ${cmd[0]} is a terminal editor, so open it from another shell.`, "info");
+			}
 			const child = spawn(cmd[0], [...cmd.slice(1), file], { detached: true, stdio: "ignore" });
-			child.on("error", () => ctx.ui.notify(`Could not run ${cmd[0]}. The content is at ${file}`, "warning"));
+			child.on("error", () => {
+				// a child_process callback: the one continuation here the host does not catch
+				try {
+					ctx.ui.notify(`Could not run ${cmd[0]}. The content is at ${file}`, "warning");
+				} catch {
+					// the activation went away first
+				}
+			});
 			child.unref();
 			ctx.ui.notify(`${item.label} · ${item.lines} lines → ${cmd[0]}  (${file})`, "info");
 		} catch (e) {
