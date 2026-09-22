@@ -1,13 +1,16 @@
 // The hover guard has to reinstall itself, because pi-cc overwrites the handler slot. Reinstalling
-// is also how it killed a session: an earlier version re-read tui.handleViewportInput each time and
-// wrapped whatever it found, which -- since the TUI is a lazy proxy that never hands back the
-// function object you assigned -- meant every frame wrapped the previous wrapper, until
-// "Maximum call stack size exceeded".
+// is also how it once killed a session: it re-read the handler each time through the TUI proxy --
+// which mints a fresh function per read, so nothing ever compared equal -- and wrapped what it found,
+// which was its own previous wrapper, until "Maximum call stack size exceeded". A second version
+// captured once but still compared through the proxy, so its "pi-cc has not patched" branch could
+// never run and it would have overwritten a later pi-cc patch every frame.
 //
-// The invariant that prevents it is structural, not behavioural: pi-cc's handler is captured once,
-// the wrapper is built once, and reinstalling re-assigns that same object. These tests read the
-// source, because the failure mode is a crash after thousands of frames rather than anything a unit
-// test would see, and because this invariant has been broken twice.
+// The invariants that hold now are structural: everything is read from the *real* TUI captured from
+// `this` in the frame wrapper, the "is it ours?" check comes before any capture, and exactly one
+// wrapper is ever built. These tests read the source because the failures are a crash after
+// thousands of frames or a silently dead click handler -- neither shows up in a unit test. They
+// match the identifiers `sink.realTui`, `sink.piccHandler`, `sink.hoverWrapper` and `installed`;
+// renaming those means updating this file, not a design violation.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -15,33 +18,43 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "extensions", "statusbar.ts"), "utf8");
-const guard = src.slice(src.indexOf("function guardHover"), src.indexOf("function mountSidebar"));
+const slice = (start, end) => {
+	const a = src.indexOf(start);
+	const b = src.indexOf(end, a + 1);
+	assert.ok(a !== -1, `marker not found: ${start}`);
+	assert.ok(b !== -1, `marker not found: ${end}`);
+	return src.slice(a, b);
+};
+const guard = slice("function guardHover(): void {", "function mountSidebar(tui: TUI): void {");
 
-test("pi-cc's handler is captured once, behind the wrapper check", () => {
-	const captures = [...guard.matchAll(/const piccHandler = t\.handleViewportInput/g)];
-	assert.equal(captures.length, 1, "capturing the live handler more than once risks wrapping our own wrapper");
-	const gate = guard.indexOf("if (!hoverWrapper) {");
-	assert.ok(gate !== -1, "the capture must sit behind a `if (!hoverWrapper)` gate");
-	assert.ok(captures[0].index > gate, "the capture must happen only when no wrapper exists yet");
+test("the real TUI is captured from `this` in the frame wrapper, not read through the proxy", () => {
+	const frames = slice("t.doRender = function (this: unknown) {", "frame = { bytes: 0");
+	assert.match(frames, /sink\.realTui \?\?= this;/, "the frame wrapper must capture the real object");
+	assert.doesNotMatch(guard, /\bt\.handleViewportInput\b/, "the guard must never read the handler through the proxy");
+	assert.match(guard, /Object\.getOwnPropertyDescriptor\(real, "handleViewportInput"\)/, "it reads the real object's own property");
 });
 
-test("exactly one wrapper function is ever constructed", () => {
-	const built = [...guard.matchAll(/hoverWrapper = function/g)];
-	assert.equal(built.length, 1, "a second construction site is a second chance to build a chain");
+test("the 'is it ours?' check precedes every capture, so a wrapper can never wrap itself", () => {
+	const ours = guard.indexOf("installed === sink.hoverWrapper");
+	const capture = guard.indexOf("sink.piccHandler = installed;");
+	assert.ok(ours !== -1 && capture !== -1, "expected both the ownership check and the capture");
+	assert.ok(ours < capture, "capturing before checking ownership is how a chain is built");
 });
 
-test("reinstalling assigns the existing wrapper, never a new one", () => {
-	assert.match(
-		guard,
-		/t\.handleViewportInput = hoverWrapper;/,
-		"the reinstall must re-assign the captured wrapper object",
-	);
-	const assignments = [...guard.matchAll(/t\.handleViewportInput = /g)];
-	assert.equal(assignments.length, 1, "only one assignment site, and it assigns hoverWrapper");
+test("an unpatched instance is left alone: the refusal branch is reachable and does not wrap the prototype", () => {
+	const refusal = guard.indexOf("pi-cc has not patched handleViewportInput");
+	const install = guard.indexOf("real.handleViewportInput = sink.hoverWrapper;");
+	assert.ok(refusal !== -1, "the refusal branch must exist");
+	assert.ok(refusal < install, "the refusal must return before anything is installed");
+	assert.match(guard, /typeof installed !== "function"[\s\S]*?return;/, "no own property means nothing to guard");
 });
 
-test("the guard counts its wrappers so a regression is visible in /prof", () => {
-	assert.match(guard, /prof\.hoverWrappers\+\+/, "/prof reports this; more than 1 means the invariant broke");
+test("exactly one wrapper is ever built, and installs re-assign that same object", () => {
+	assert.equal((guard.match(/sink\.hoverWrapper = function/g) ?? []).length, 1, "one construction site");
+	assert.match(guard, /if \(!sink\.hoverWrapper\) \{/, "construction is gated on the sink not already holding one");
+	assert.equal((guard.match(/real\.handleViewportInput = /g) ?? []).length, 1, "one assignment site");
+	assert.match(guard, /real\.handleViewportInput = sink\.hoverWrapper;/, "and it assigns the existing wrapper");
+	assert.match(guard, /prof\.hoverWrappers\+\+/, "/prof reports the count; more than 1 means this broke");
 });
 
 // The suppression predicate itself is pure, so it can just be run. It lives outside guardHover.

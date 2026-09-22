@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 116ed9b365050b014e42d1b41628a8e6dd8b5c6e
+source-hash: 11240382bb2cb618e908461954972026f0be86c6
 documented: 2026-09-20
 ---
 
@@ -47,8 +47,12 @@ selection and scrolling are unchanged; what is lost is a hover highlight that wa
 row anyway. With the column off, pi-cc is left alone — its assumption holds there.
 
 Two things this cost to learn, both in [[pi-internals]]: pi-cc **overwrites** the handler slot
-(`restoreFullscreenViewportInput`) so the guard must reinstall itself, and the TUI is a **lazy proxy**
-so the wrapper must be identified by a tag, not by identity.
+(`restoreFullscreenViewportInput`) so the guard must reinstall itself, and the TUI extensions are
+handed is a **proxy that mints a fresh function per method read**, so nothing about the handler can
+be learned through it — not identity, not a tag on the function. The guard works on the real
+`TuiAltScreen`, captured from `this` inside the frame wrapper, and reads its own-property descriptor
+directly. The documented `onTerminalInput` route is closed: the alt-screen registers its own viewport
+handler as an input listener in its constructor, ahead of any extension, and it consumes mouse.
 
 ## 2. pi-tui `Text` caches exactly one width
 
@@ -105,7 +109,8 @@ They are inverted deliberately. **A failing canary means upstream fixed somethin
 workaround should be deleted**, not repaired. They skip cleanly where pi is not installed, so CI
 passes without it.
 
-Verified against pi-coding-agent 0.86.1, pi-tui 0.86.1, pi-cc-extensions 0.8.71.
+Verified against pi-coding-agent 0.87.0, pi-tui 0.87.0, pi-cc-extensions 0.8.71 (all three canaries
+still pass after the 0.86.1 → 0.87.0 move on 22 Sept 2026).
 
 (The `source-hash` here tracks `extensions/statusbar.ts`, which carries all three patches, so this
 note goes stale whenever that file changes for any reason — re-read the patches, then `--fix`.)

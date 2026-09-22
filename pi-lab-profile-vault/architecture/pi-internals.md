@@ -1,7 +1,7 @@
 ---
 verified-against:
-  pi-coding-agent: 0.86.1
-  pi-tui: 0.86.1
+  pi-coding-agent: 0.87.0
+  pi-tui: 0.87.0
   pi-cc-extensions: 0.8.71
   pi-subagents: 0.19.0
 documented: 2026-09-20
@@ -136,9 +136,18 @@ Three things follow, all of which cost time to learn:
 - It always chains from the **prototype**, never from whatever is currently installed, so your wrapper
   is not chained to; it is **overwritten**. `restoreFullscreenViewportInput` does exactly that,
   assigning the prototype method back onto the instance.
-- **The TUI is a lazy proxy.** Reading `tui.handleViewportInput` back does not return the same function
-  object you assigned, so identity checks against your own wrapper always fail. Tag the function with
-  a property and test that instead.
+- **The TUI is a proxy** (`createInteractiveTuiReference` in `tui-renderer.js`): its `get` mints a
+  **new arrow per read of any function-valued property**, `set` forwards to the real TUI, and
+  non-function values — including symbol-keyed hook objects — pass straight through. So identity
+  checks on methods are impossible through it, *and so are tags on the function* (they are not on
+  the object you read back). Symbol-keyed hook objects work. The one handle on the real object: inside
+  a wrapper you installed, `this` is the real `TuiAltScreen`.
+- **`TuiAltScreen` registers `handleViewportInput` as an input listener in its own constructor**,
+  ahead of every extension listener, and it consumes mouse packets. No `onTerminalInput` handler can
+  see mouse input. (`TerminalInputHandler` returns `{ consume?, data? }`; `consume` short-circuits.)
+- **`setExtensionFooter` and `setExtensionWidget` invoke their factories synchronously at
+  registration** — so anything pi-cc patches from its widget factory is in place the moment its
+  `session_start` returns.
 
 ## Extension API, as used here
 
@@ -152,8 +161,13 @@ Context: `ctx.ui.setFooter/setWidget/setStatus/custom/select/input/notify/onTerm
 Sharp edges:
 
 - **`ui.select(title, options: string[])` returns a string**, not `{label, value}`.
-- After `session_shutdown` every getter on the captured `ctx` **throws**. Guard with a `dead` flag and
-  a `try/catch` accessor; see invariant 1 in [[../00-start-here]].
+- After `session_shutdown` every getter on the captured `ctx` **throws**, and so do `pi.events.on`,
+  `pi.events.emit` and `pi.sendMessage`; `runner.invalidate()` also unsubscribes every `pi.events.on`
+  the old activation registered and clears its terminal-input listeners and widgets. A throw inside a
+  slash-command handler is **caught by the host** (`_tryExecuteExtensionCommand`); a throw from a
+  timer, a process/event callback, a render or an un-awaited promise is not, and pi has **no
+  `unhandledRejection` handler**, so it exits. The event bus wraps listeners in try/catch, so the only
+  throw `emit` can produce is the stale assert. See invariant 1 in [[../00-start-here]].
 - The `pi` manifest in `package.json` supports only `extensions`, `skills`, `prompts` and `themes`.
   Agents and model configs are **not** installable that way — hence the symlinks into `~/.pi/agent/`.
 

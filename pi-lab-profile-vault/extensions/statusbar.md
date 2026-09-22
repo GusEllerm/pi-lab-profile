@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 116ed9b365050b014e42d1b41628a8e6dd8b5c6e
+source-hash: 11240382bb2cb618e908461954972026f0be86c6
 documented: 2026-09-20
 ---
 
@@ -261,12 +261,20 @@ as harmless churn. It was not churn. Each frame wrapped the previous wrapper, th
 per frame, and the session eventually died with **Maximum call stack size exceeded**. Tagging the
 wrapper with a property did not help either: the tag cannot be read back through the proxy.
 
-The rule that actually holds: **nothing may depend on recognising our own wrapper.** pi-cc's handler
-is captured once, the wrapper is constructed once around that capture, and reinstalling is only ever
-re-assigning the same object. Wrapping a wrapper then becomes impossible rather than unlikely.
-`prof.hoverWrappers` must never exceed 1 — `/prof` prints it — and
-`tests/hover-guard.test.mjs` asserts the structure in the source, because the failure only shows up
-after thousands of frames and this invariant has now been broken twice.
+That second version still compared through the proxy, so its "pi-cc has not patched" branch could
+never run: it captured whatever it first read and would have overwritten a later pi-cc patch every
+frame, with `/compat` reporting success (review H3).
+
+**What holds now (22 Sept 2026): the guard never touches the proxy.** The frame wrapper is a
+`function`, and pi calls it as `this.doRender()` on the *real* `TuiAltScreen`, so `this` is the real
+object — captured into `sink.realTui` on the first frame, before any input exists. `guardHover` then
+reads `Object.getOwnPropertyDescriptor(realTui, "handleViewportInput")`: ours on top → nothing to do;
+no own property → pi-cc has not patched, leave the prototype alone (the refusal branch is reachable
+for the first time); any other function → pi-cc's patch (it always chains from the prototype, so it
+is never a wrapper of ours), taken as the inner handler through `sink.piccHandler`. One wrapper per
+process, held on the sink so a reload repoints rather than rebuilds. Measured: `1 built, 1× installed`
+where the proxy-based versions reported `775× installed` in 775 frames. `tests/hover-guard.test.mjs`
+pins the order — ownership check before capture, refusal before install, one construction site.
 
 ### The resize listener (fixed 22 Sept 2026)
 
