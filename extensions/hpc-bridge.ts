@@ -97,9 +97,26 @@ export function applyResult(state: HpcState, tool: string, result: Record<string
 
 export type SlotState = "ok" | "warn" | "error" | "busy" | "idle";
 
-/** What the column shows: a state colour, one line, and the detail rows. */
-export function describe(s: HpcState, now = Date.now()): { text: string; state: SlotState; details: string[] } {
-	if (!s.facility && !s.status) return { text: "hpc –", state: "idle", details: ["no facility connected", "ask: what HPC facilities can I use?"] };
+/** "1m", "2h10m": the block has been warm this long. */
+const warmFor = (since: number, now: number): string => {
+	const m = Math.max(1, Math.round((now - since) / 60_000));
+	return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+};
+
+/**
+ * What the column shows, and what /hpc shows.
+ *
+ * `column` is three or four short rows for a ~21-column cell: the facility; status and block with
+ * how long it has been warm; partition and account when known; spend once there is a block. The
+ * server's `notice` is not among them -- it is prose for the model ("worker live on globus1
+ * (py3.12.3, dill0.3.9). billed block bounds -- a task runs up to ~7180s...") and it wrapped into
+ * seven rows cut mid-word. `full` has everything, for /hpc and the dashboard.
+ */
+export function describe(s: HpcState, now = Date.now()): { text: string; state: SlotState; column: string[]; full: string[] } {
+	if (!s.facility && !s.status) {
+		const idle = ["no facility connected", "ask: what HPC facilities can I use?"];
+		return { text: "hpc –", state: "idle", column: idle, full: idle };
+	}
 	const spending = s.block === "warm" || s.block === "provisioning";
 	const state: SlotState =
 		s.status === "failed" || s.status === "unsupported"
@@ -110,16 +127,26 @@ export function describe(s: HpcState, now = Date.now()): { text: string; state: 
 					? "busy"
 					: "ok";
 	const facility = s.facility ?? "?";
-	const head = spending ? `${facility} · block ${s.block}` : `${facility} · ${s.status ?? "connected"}`;
-	const details = [
-		`${facility}${s.status ? ` · ${s.status.replace(/_/g, " ")}` : ""}`,
-		...(s.block ? [`block ${s.block}${s.block === "warm" && s.warmSince !== undefined ? ` · ${Math.max(1, Math.round((now - s.warmSince) / 60_000))} min` : ""}`] : []),
-		...(s.spend !== undefined ? [`spent ${s.spend.toFixed(2)} node-h this session`] : []),
-		...(s.partition || s.account ? [`${s.partition ?? "default partition"} · ${s.account ?? "default account"}`] : []),
-		...(s.notice ? [s.notice.slice(0, 120)] : []),
-		...(spending ? ["release: hpc_stop_endpoint"] : []),
+	const status = s.status?.replace(/_/g, " ");
+	const block = s.block === "warm" && s.warmSince !== undefined ? `warm ${warmFor(s.warmSince, now)}` : s.block;
+	const where = [s.partition, s.account].filter(Boolean).join(" · ");
+	const spend = s.spend !== undefined && (s.block !== undefined || s.spend > 0) ? `${s.spend.toFixed(2)} node-h` : "";
+	const column = [
+		facility,
+		[status, block].filter(Boolean).join(" · "),
+		...(where ? [where] : []),
+		...(spend ? [spend] : []),
 	];
-	return { text: `hpc ${head}`, state, details };
+	const full = [
+		`${facility}${status ? ` · ${status}` : ""}`,
+		...(block ? [`block ${block}`] : []),
+		...(s.partition || s.account ? [`partition ${s.partition ?? "default"} · account ${s.account ?? "default"}`] : []),
+		...(spend ? [`spent ${spend} this session`] : []),
+		...(s.notice ? [s.notice] : []),
+		...(spending ? ["release the block: hpc_stop_endpoint"] : []),
+	];
+	const head = spending ? `${facility} · ${block}` : `${facility} · ${status ?? "connected"}`;
+	return { text: `hpc ${head}`, state, column, full };
 }
 
 /** The bridge's tool prefix for the hpc-bridge server, from the same config it reads. */
@@ -155,7 +182,7 @@ export default function (pi: ExtensionAPI): void {
 	};
 	const publish = () => {
 		const d = describe(state);
-		emit("statusbar:slot", { id: "hpc", text: d.text, state: d.state, statusKey: "hpc", details: () => describe(state).details });
+		emit("statusbar:slot", { id: "hpc", text: d.text, state: d.state, statusKey: "hpc", details: () => describe(state).column });
 	};
 
 	pi.on("tool_call", async (event, ctx: ExtensionContext) => {
@@ -217,7 +244,7 @@ export default function (pi: ExtensionAPI): void {
 			if (dead) return;
 			const d = describe(state);
 			const guard = prefix === undefined ? "\n! no hpc-bridge server in mcp.json — /mcp" : "";
-			ctx.ui.notify(`${d.text}\n${d.details.join("\n")}${guard}`, d.state === "error" ? "error" : d.state === "warn" ? "warning" : "info");
+			ctx.ui.notify(`${d.text}\n${d.full.join("\n")}${guard}`, d.state === "error" ? "error" : d.state === "warn" ? "warning" : "info");
 		},
 	});
 	void tool; // the prefix helper is what /hpc's description refers to

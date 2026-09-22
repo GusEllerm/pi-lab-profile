@@ -1,6 +1,6 @@
 ---
 source: extensions/hpc-bridge.ts
-source-hash: fbacff84e149d39c810a8feeac19362e04d34bfc
+source-hash: d1297ffa6b7acd7ebaadcd022d8815a7b9b43b30
 documented: 2026-09-22
 ---
 
@@ -26,7 +26,11 @@ and Pi has no permission popups. This does. Built 22 Sept 2026 as option B of
   first JSON object in the text — hpc-bridge returns its pydantic models as JSON) and folded by
   `applyResult` into a state shaped after `EndpointStatus`, `ConnectFacilityResult` and
   `ShellOutcome`: facility, status/phase, block state, session spend, partition, account, notice,
-  and when the block went warm. `describe` turns that into the column's HPC row — hidden until a
+  and when the block went warm. `describe` returns two forms: `column` — three or four rows of at
+most ~21 cells (facility; `status · warm 5m`; `partition · account`; `0.30 node-h`) — and `full`,
+which adds the server's `notice` and the release hint, for `/hpc`. The notice is prose written for
+the model; in the column it wrapped into seven rows cut mid-word, which is why it is not there.
+`describe` turns the state into the column's HPC row — hidden until a
   facility is connected, `busy` while a block is warm or provisioning, `warn` on `needs_*`,
   `draining`, `tearing_down`, `error` on `failed`. `/hpc` prints the same.
 - **The tool prefix follows `mcp.json`** (`hpcPrefix`): the server whose command mentions

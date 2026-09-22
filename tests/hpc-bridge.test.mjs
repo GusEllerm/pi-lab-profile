@@ -56,17 +56,24 @@ test("results fold into state the way the models are shaped", () => {
 	assert.equal(applyResult(s, "list_facilities", { anything: 1 }).facility, "globus-labs", "unrelated tools leave the state alone");
 });
 
-test("describe: idle until connected, busy while a block is warm, warn on needs_*", () => {
+test("describe: a compact column and a full account, and the notice only in the latter", () => {
 	assert.equal(describe({}).state, "idle");
-	const warm = describe({ facility: "globus-labs", status: "up", block: "warm", spend: 0.3, partition: "gpu", account: "lab", warmSince: 0 }, 5 * 60_000);
+	const warm = describe(
+		{ facility: "globus-labs", status: "up", block: "warm", spend: 0.3, partition: "main", account: "lab", warmSince: 0, notice: "worker live on globus1 (py3.12.3, dill0.3.9). billed block bounds — a task runs up to ~7180s" },
+		5 * 60_000,
+	);
 	assert.equal(warm.state, "busy");
-	assert.match(warm.text, /globus-labs · block warm/);
-	assert.ok(warm.details.some((d) => /block warm · 5 min/.test(d)), warm.details.join(" | "));
-	assert.ok(warm.details.some((d) => /spent 0.30 node-h/.test(d)));
-	assert.ok(warm.details.some((d) => /release: hpc_stop_endpoint/.test(d)));
+	assert.match(warm.text, /globus-labs · warm 5m/);
+	assert.deepEqual(warm.column, ["globus-labs", "up · warm 5m", "main · lab", "0.30 node-h"], "four short rows, no prose");
+	assert.ok(warm.column.every((row) => row.length <= 21), warm.column.join(" | "));
+	assert.ok(warm.full.some((d) => /worker live on globus1/.test(d)), "the notice is in the full account");
+	assert.ok(warm.full.some((d) => /release the block: hpc_stop_endpoint/.test(d)));
 	assert.equal(describe({ facility: "x", status: "needs_login" }).state, "warn");
+	assert.deepEqual(describe({ facility: "x", status: "needs_login" }).column, ["x", "needs login"]);
 	assert.equal(describe({ facility: "x", status: "failed" }).state, "error");
-	assert.equal(describe({ facility: "x", status: "down", block: "cold" }).state, "ok");
+	assert.equal(describe({ facility: "x", status: "down", block: "cold", spend: 0 }).state, "ok");
+	assert.deepEqual(describe({ facility: "x", status: "down", block: "cold", spend: 0 }).column, ["x", "down · cold", "0.00 node-h"]);
+	assert.match(describe({ facility: "x", status: "up", block: "warm", warmSince: 0 }, 130 * 60_000).column[1], /warm 2h10m/);
 });
 
 test("the tool prefix follows mcp.json, including a custom prefix and no prefix", () => {
@@ -126,12 +133,13 @@ test("results publish the hpc slot for the column", async () => {
 		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "2", toolName: "hpc_ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"up","block_state":"warm","session_spend":0.1,"partition":"gpu","account":"lab"}' }] });
 		[, slot] = pi.emitted.at(-1);
 		assert.equal(slot.state, "busy");
-		assert.ok(slot.details().some((d) => /gpu · lab/.test(d)));
+		assert.ok(slot.details().some((d) => /gpu · lab/.test(d)), slot.details().join(" | "));
 		const before = pi.emitted.length;
 		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "3", toolName: "hpc_run_shell", isError: true, content: [{ type: "text", text: "boom" }] });
 		assert.equal(pi.emitted.length, before, "an errored result does not change the slot");
 		const notes = [];
 		await pi.commands.get("hpc").handler("", { ui: { notify: (m) => notes.push(m) } });
 		assert.match(notes[0], /block warm/);
+		assert.doesNotMatch(slot.details().join("\n"), /release the block/, "the column carries no prose");
 	} finally { restore(); }
 });

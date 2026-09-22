@@ -1,6 +1,6 @@
 ---
 source: extensions/mcp.ts
-source-hash: 09dcadac9ba7b05e51aed27bd75253d4521abc7a
+source-hash: f594d748c63b84e3354bba6794aaa72c9653b508
 documented: 2026-09-22
 ---
 
