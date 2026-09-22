@@ -686,7 +686,7 @@ export default function (pi: ExtensionAPI): void {
 			const inner = Math.max(10, width - 4); // │ + 2 left gutter + 1 right gutter
 			const compact = width < SIDEBAR_COMPACT_BELOW; // label on its own line, value indented
 			const valueWidth = compact ? inner - 2 : inner - 11;
-			const lines: string[] = [];
+			const lines: string[] = [""]; // a breath of space above the first section
 			const section = (label: string, state: SlotState | undefined, values: string[]) => {
 				const mark = state && MARK[state];
 				if (compact) lines.push(t.fg("dim", label) + (mark ? ` ${t.fg(mark[1], mark[0])}` : ""));
