@@ -1,6 +1,6 @@
 ---
 source: extensions/rounds.ts
-source-hash: 0bbf8704794dd416db2a69f41bece8eebfcea765
+source-hash: 8564b6916b510d7819e6c44add9289c384897217
 documented: 2026-09-20
 ---
 
@@ -172,6 +172,20 @@ post-`await` point in `round()` check `dead` before touching `ctx`; and both com
 listener is subscribed *before* its timer is armed (a throw from `pi.events.on` used to leave a timer
 reaching for an unassigned unsubscriber), and a phase that times out now calls `stopAgent` rather
 than merely forgetting an agent that is still running.
+
+### The critic contract (fixed 22 Sept 2026)
+
+The critic's verdict words are machine-read, and `agents/critic.md` now says so: each finding's
+verdict line starts with `CONFIRMED`/`PLAUSIBLE`/`REJECTED`, the capitalised words appear nowhere
+else, and the output ends with `TALLY: confirmed=N plausible=N rejected=N`. `tally()` takes the TALLY
+line as the authority and otherwise counts only lines that *start* with a verdict — the first
+version matched anywhere, case-insensitively, so "nothing was confirmed" and the critic's own bottom
+line inflated the count and could start a dev round with nothing to fix. `surviving()` hands the
+next dev round the critique **minus its REJECTED blocks**; it used to receive the whole text under
+"findings to address", rejected ones included. Both are exported and tested in
+`tests/round-tally.test.mjs`. Also: `running` is now claimed *before* the readiness await, so two
+commands in that window can no longer share one round's state; `parse()` and `round()` apply the
+same default when `"panel": []`; the critic prompt says how many reviewers there were.
 
 ## Invariants a future change must not break
 

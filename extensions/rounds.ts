@@ -66,6 +66,51 @@ function readConfig(cwd: string): RoundsConfig {
 	return {};
 }
 
+/**
+ * The critic's verdict words are the machine-readable part of its output: they build the verdict
+ * line and decide whether another dev round runs. `agents/critic.md` asks for a closing
+ * `TALLY: confirmed=N plausible=N rejected=N` line, and that is the authority when present. Without
+ * one, a verdict is counted only where a line *starts* with the capitalised word -- optionally
+ * after a list marker or bold -- and never inside prose. The first version matched the words
+ * anywhere, case-insensitively, so "nothing was confirmed" and the critic's own bottom-line
+ * paragraph inflated the tally and could start a dev round with nothing to fix.
+ */
+export const VERDICTS = ["CONFIRMED", "PLAUSIBLE", "REJECTED"] as const;
+export type Verdict = (typeof VERDICTS)[number];
+const VERDICT_LINE = /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*|__)?(CONFIRMED|PLAUSIBLE|REJECTED)\b/;
+const TALLY_LINE = /^\s*TALLY:\s*confirmed\s*=\s*(\d+)\D+plausible\s*=\s*(\d+)\D+rejected\s*=\s*(\d+)/im;
+export function tally(critique: string): Record<Verdict, number> {
+	const t = TALLY_LINE.exec(critique);
+	if (t) return { CONFIRMED: Number(t[1]), PLAUSIBLE: Number(t[2]), REJECTED: Number(t[3]) };
+	const out: Record<Verdict, number> = { CONFIRMED: 0, PLAUSIBLE: 0, REJECTED: 0 };
+	for (const line of critique.split("\n")) {
+		const m = VERDICT_LINE.exec(line);
+		if (m) out[m[1] as Verdict]++;
+	}
+	return out;
+}
+
+/**
+ * What the next dev round is handed: the critique with its REJECTED findings removed. A finding
+ * runs from its verdict line to the next verdict line, heading, or the TALLY line; the preamble
+ * before the first verdict and the bottom line after a heading are kept. A critique with no verdict
+ * lines at all is passed whole -- there is nothing to filter on, and dropping it would drop the
+ * only feedback there is.
+ */
+export function surviving(critique: string): string {
+	const lines = critique.split("\n");
+	if (!lines.some((l) => VERDICT_LINE.test(l))) return critique;
+	const kept: string[] = [];
+	let dropping = false;
+	for (const line of lines) {
+		const verdict = VERDICT_LINE.exec(line)?.[1];
+		if (verdict) dropping = verdict === "REJECTED";
+		else if (/^\s*#|^\s*TALLY:/i.test(line)) dropping = false; // a heading or the tally ends any block
+		if (!dropping) kept.push(line);
+	}
+	return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export default function (pi: ExtensionAPI): void {
 	/**
 	 * A round outlives a `/reload`: its phases are promises, and pi-subagents keeps running the
@@ -210,14 +255,10 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	const failed = (o: AgentOutcome) =>
 		Boolean(o.error) || (o.status !== undefined && o.status !== "completed") || !o.result?.trim();
-	const count = (s: string, word: string) => (s.match(new RegExp(`\\b${word}\\b`, "gi")) ?? []).length;
-
 	/** One line a human can act on: how many findings survived the critic. */
 	function verdictLine(critique: string | undefined): string {
 		if (!critique) return "no critique";
-		const confirmed = count(critique, "CONFIRMED");
-		const plausible = count(critique, "PLAUSIBLE");
-		const rejected = count(critique, "REJECTED");
+		const { CONFIRMED: confirmed, PLAUSIBLE: plausible, REJECTED: rejected } = tally(critique);
 		if (!confirmed && !plausible && !rejected) return "no findings";
 		return [
 			confirmed ? `${confirmed} confirmed` : "",
@@ -269,14 +310,17 @@ export default function (pi: ExtensionAPI): void {
 
 	async function round(ctx: ExtensionContext, task: string, rounds: number, skipDev: boolean, seats: number): Promise<void> {
 		if (running) return ctx.ui.notify(`A round is already running (${running.phase}). /round stop ends it.`, "warning");
+		// Claimed before the await below: a second /round or /review issued during the readiness ping
+		// used to pass this guard too, and the two then shared `live`, `cancelled` and `running`.
+		running = { task, phase: "starting", since: Date.now() };
 		if (!(await subagentsReady())) {
+			running = undefined;
 			return ctx.ui.notify(
 				"/round needs @tintinweb/pi-subagents, which is not answering in this session.\n" +
 					"Install it with:  pi install npm:@tintinweb/pi-subagents",
 				"error",
 			);
 		}
-		running = { task, phase: "starting", since: Date.now() };
 		cancelled = false;
 		live.clear();
 		const phases: Phase[] = [];
@@ -299,7 +343,7 @@ export default function (pi: ExtensionAPI): void {
 					const dev = await runPhase(
 						"dev",
 						`dev${suffix}: ${task.slice(0, 40)}`,
-						carry ? `${task}\n\nA previous round left these findings to address:\n${carry}` : task,
+						carry ? `${task}\n\nA previous round's critic confirmed these findings; address them:\n${carry}` : task,
 						cfg.dev,
 					);
 					phases.push({ role: "dev", title: `Dev${suffix}`, outcome: dev });
@@ -337,7 +381,7 @@ export default function (pi: ExtensionAPI): void {
 					"critic",
 					`critique${suffix}`,
 					`Verify these reviews against the code in this repository.\n\nThe task was:\n${task}\n\n` +
-						`${usable.length > 1 ? "Two reviewers looked at this change independently. Merge findings that are the same defect, and judge each distinct finding once.\n\n" : ""}` +
+						`${usable.length > 1 ? `${usable.length} reviewers looked at this change independently. Merge findings that are the same defect, and judge each distinct finding once.\n\n` : ""}` +
 						`The reviews to verify:\n${merged}`,
 					cfg.critic,
 				);
@@ -345,8 +389,8 @@ export default function (pi: ExtensionAPI): void {
 				if (dead) return;
 				if (failed(critique) || cancelled) break;
 
-				carry = text(critique); // the next round works from what survived scrutiny
-				if (!count(carry, "CONFIRMED")) break; // nothing survived: another dev pass has nothing to fix
+				if (!tally(text(critique)).CONFIRMED) break; // nothing survived: another dev pass has nothing to fix
+				carry = surviving(text(critique)); // the next round works from what survived scrutiny -- not from what was thrown out
 			}
 
 			if (dead) return; // writeReport reads ctx.cwd, which throws on a replaced activation
@@ -401,7 +445,8 @@ export default function (pi: ExtensionAPI): void {
 	/** `--rounds N` and `--reviewers N` in any order, before the task text. */
 	function parse(arg: string, cwd: string): { rounds: number; seats: number; task: string } {
 		let rounds = 1;
-		let seats = (readConfig(cwd).panel ?? DEFAULTS.panel).length;
+		const configured = readConfig(cwd).panel;
+		let seats = (configured?.length ? configured : DEFAULTS.panel).length; // the same rule round() applies
 		let rest = arg;
 		for (;;) {
 			const m = /^--(rounds|reviewers)[\s=]+(\d+)\s*([\s\S]*)$/.exec(rest);

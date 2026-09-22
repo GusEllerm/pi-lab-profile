@@ -28,3 +28,18 @@ finding describes is not in the file at all.
 Then give a one-paragraph bottom line: what a maintainer should actually fix first, or that the
 change is sound. Be willing to say the review found nothing real — that is a useful result, and a
 reviewer who invents problems is worse than one who finds none.
+
+## Output contract — `/round` parses this
+
+Your verdicts are machine-read: they build the round's verdict line (`2 confirmed · 1 rejected`),
+decide whether another dev round runs, and select what the next dev round is handed. So:
+
+- **Start each finding's verdict line with the word** — `CONFIRMED`, `PLAUSIBLE` or `REJECTED`, in
+  capitals — one line per finding, the word first on its line.
+- **Use the capitalised words nowhere else.** In prose, write them in lower case ("nothing was
+  confirmed"); the parser counts only lines that begin with the capitalised word.
+- **End with exactly one line:** `TALLY: confirmed=N plausible=N rejected=N`. When present, this
+  line is the authority; the per-line count is the fallback.
+
+The next dev round receives only the CONFIRMED and PLAUSIBLE findings, so put everything the
+implementer needs — the location, the failure, the fix — inside those blocks.
