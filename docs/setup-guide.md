@@ -22,8 +22,8 @@ Work through the steps in order. Each has a check; don't move on until it passes
 
 **Part 2** (section 11 onwards, at the end of this file) adds what came later: the ALCF gateway as
 a second provider, a right-hand column instead of the bottom status line, an interactive subagent
-list you can attach to, and a dev → review → critique round runner. Its local files ship as
-`pi-lab-kit.tar.gz` next to this guide. Part 1 first.
+list you can attach to, and a dev → review → critique round runner. It is installed as a package
+from this repository — no files to copy. Part 1 first.
 
 ---
 
@@ -71,13 +71,15 @@ tunnel helper honours it.
 ## 2. Install Pi
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1
-npm view @earendil-works/pi-coding-agent@0.85.1 dist.integrity
-# expect: sha512-FGRN+OHbWaefBPGaTggAdLjrIHW+s2PzLyglz/5dfLzb9of7uuXMXYC0fJIeZTw+shS32o2cuQ9jF7YSDuL/oQ==
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.0
+npm view @earendil-works/pi-coding-agent@0.87.0 dist.integrity
+# expect: sha512-S9JJVGHya/h0e0M+zwPTB6RkPe7PmLLqfBUTssFYW5mxAti6oZEILn4jvaUImENRC3U9RwXAB6H4gw8xj2J0GQ==
 ```
 
-**Check:** `pi --version` prints `0.85.1`. A newer Pi is probably fine, but the code-panel
-extension in step 7 was written against 0.85.1, so say so if you install a different version.
+**Check:** `pi --version` prints `0.87.0`. The profile's package requires ≥ 0.86.0 and was
+verified on 0.86.1 and 0.87.0; it leans on three Pi internals that a release could change, and
+`npm test` in the repository carries a canary for each — run it after any upgrade, and say which
+version you installed if it is not this one.
 
 ## 3. Tunnel, endpoint check, and the model's real parameters
 
@@ -393,96 +395,15 @@ It replaces the renderer's internal `renderToken` method, which isn't a document
 hook. If a future Pi release changes that method, the extension switches itself off and the
 fences come back.
 
-Create `~/.pi/agent/extensions/code-panels.ts`:
+The extension ships with the package installed in Part 2 — its source is
+[`extensions/code-panels.ts`](../extensions/code-panels.ts) in this repository, and the package
+manifest loads it. There is nothing to create by hand, and **nothing to copy into
+`~/.pi/agent/extensions/`**: a copy there loads beside the packaged one, and both appear in
+`[Extensions]`. (An earlier revision of this guide embedded the file's source here; it drifted from
+the real file, which is why it is a link now.)
 
-````ts
-/**
- * code-panels — render fenced code blocks as tinted panels instead of literal ``` fences.
- *
- * Pi's Markdown renderer hard-codes the fence lines (pi-tui components/markdown.js, `case "code"`),
- * and markdown transformers run before rendering, so they cannot remove them. This wraps
- * Markdown.prototype.renderToken for code tokens only and leaves every other token untouched.
- *
- * Output per block: a panel header carrying the language label, then the syntax-highlighted code
- * with a one-column inset, each line padded to full width on a theme background. The tint is a
- * background color, not gutter characters, so copying a selection yields clean code.
- *
- * Display-only: the session and model context keep the original Markdown.
- * Written against Pi 0.85.1; if a Pi update changes renderToken, the guard below falls back to
- * Pi's own rendering rather than breaking the transcript.
- */
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { highlightCode } from "@earendil-works/pi-coding-agent";
-import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-
-// Tweak here. Backgrounds: selectedBg | userMessageBg | customMessageBg | toolPendingBg | toolSuccessBg
-const PANEL_BG = "toolPendingBg" as const;
-const INSET = " ";
-const SHOW_LANGUAGE_LABEL = true;
-
-const PATCHED = Symbol.for("code-panels.patched");
-// Global so a /reload's fresh module instance feeds the already-installed patch.
-const THEME_SLOT = Symbol.for("code-panels.theme");
-const slot = globalThis as { [THEME_SLOT]?: () => Theme | undefined };
-
-function renderPanel(token: { text: string; lang?: string }, width: number, theme: Theme): string[] {
-	const bgAnsi = theme.getBgAnsi(PANEL_BG);
-	// Highlighters and theme.fg emit resets; re-arm the background after any that would clear it.
-	const keepBg = (s: string) => s.replace(/\x1b\[(?:0|49)?m/g, (m) => m + bgAnsi);
-	const fill = (s: string) => {
-		const pad = Math.max(0, width - visibleWidth(s));
-		return `${bgAnsi}${keepBg(s)}${" ".repeat(pad)}\x1b[49m`;
-	};
-
-	const lang = (token.lang ?? "").trim().split(/\s+/)[0] ?? "";
-	const lines: string[] = [];
-	lines.push(fill(SHOW_LANGUAGE_LABEL && lang ? theme.fg("mdCodeBlockBorder", `${INSET}${lang}`) : ""));
-
-	const inner = Math.max(1, width - INSET.length * 2);
-	for (const codeLine of highlightCode(token.text, lang || undefined)) {
-		const wrapped = codeLine.length === 0 ? [""] : wrapTextWithAnsi(codeLine, inner);
-		for (const piece of wrapped) lines.push(fill(`${INSET}${piece}`));
-	}
-	lines.push(fill(""));
-	return lines;
-}
-
-export default function (pi: ExtensionAPI): void {
-	pi.on("session_start", (_event, ctx) => {
-		const ui = ctx.ui;
-		// Read lazily so /theme switches apply; non-TUI modes may have no theme.
-		slot[THEME_SLOT] = () => {
-			try {
-				return ui.theme;
-			} catch {
-				return undefined;
-			}
-		};
-	});
-
-	const proto = Markdown.prototype as unknown as {
-		renderToken: (token: any, width: number, nextTokenType?: string, styleContext?: unknown) => string[];
-		[PATCHED]?: boolean;
-	};
-	if (proto[PATCHED] || typeof proto.renderToken !== "function") return; // /reload safety, API drift
-	const original = proto.renderToken;
-
-	proto.renderToken = function (token, width, nextTokenType, styleContext) {
-		const theme = slot[THEME_SLOT]?.();
-		if (token?.type !== "code" || typeof token.text !== "string" || !theme) {
-			return original.call(this, token, width, nextTokenType, styleContext);
-		}
-		try {
-			const lines = renderPanel(token, width, theme);
-			if (nextTokenType && nextTokenType !== "space") lines.push("");
-			return lines;
-		} catch {
-			return original.call(this, token, width, nextTokenType, styleContext);
-		}
-	};
-	proto[PATCHED] = true;
-}
-````
+If you are doing Part 1 on its own, without the package, skip this step — the fences stay, and
+nothing else changes.
 
 ## 8. Subagents: `@tintinweb/pi-subagents`
 
@@ -536,7 +457,10 @@ printf 'def add(a, b):\n    return a - b\n\ndef mul(a, b):\n    return a * b\n' 
    `pi --no-session -p "Use the Agent tool (subagent_type Explore, run_in_background false) to find which function in calc.py is buggy. Do not read the file yourself. Then tell me in one sentence what it found."`
    It should name `add`.
 4. **Interactive UI.** Ask the user to run `pi` and confirm:
-   - The startup header lists `[Extensions] @tintinweb/pi-subagents@0.19.0…, code-panels.ts, pi-cc-extensions@0.8.71`.
+   - The startup header's `[Extensions]` line lists `@tintinweb/pi-subagents@0.19.0…` and
+     `pi-cc-extensions@0.8.71`, and — once Part 2 is installed — this profile's package with
+     `code-panels.ts` among its extensions, **once**. A second `code-panels.ts` means a stray copy
+     in `~/.pi/agent/extensions/`; delete it.
    - Asking for a Python snippet shows a tinted panel labelled `python`, with no ``` lines.
    - Clicking a `✓ Read …` row, or a thinking row's **"click to show more"**, expands it.
    - `/agents` opens the agents menu.
@@ -586,19 +510,25 @@ npm uninstall -g @earendil-works/pi-coding-agent   # leaves ~/.pi/agent/ in plac
 # Part 2 — what came after
 
 Part 1 above is the 2026-09-14 setup against Pi 0.85.1. Everything below was added and tested on
-**2026-09-20 against Pi 0.86.0**: a second inference provider (the ALCF gateway), a right-hand
+**2026-09-20 against Pi 0.86.1**, and re-verified on 0.87.0 on 2026-09-22: a second inference provider (the ALCF gateway), a right-hand
 column instead of the bottom "chin", an interactive subagent list you can attach to, and a
 dev → review → critique round runner.
 
-The local files for all of it ship as **`pi-lab-kit.tar.gz`** alongside this guide. Do Part 1
-first; none of this replaces it.
+All of it lives in this repository and installs as a Pi package. Do Part 1 first; none of this
+replaces it.
 
 ```bash
-tar xzf pi-lab-kit.tar.gz && cat pi-lab-kit/README.md
-cp pi-lab-kit/extensions/*.ts ~/.pi/agent/extensions/
-cp -r pi-lab-kit/agents       ~/.pi/agent/
-cp pi-lab-kit/bin/*           ~/.local/bin/ && chmod +x ~/.local/bin/{globus-tunnel,alcf-token}
+pi install git:github.com/GusEllerm/pi-lab-profile       # the extensions, via Pi's package manifest
+cd "$(pi list 2>/dev/null | grep -o '/.*pi-lab-profile' | head -1 || echo ~/Projects/pi-lab-profile)"
+scripts/install.sh lab     # what the manifest cannot carry: agent roles, models.json, rounds.json, bin helpers
 ```
+
+`pi install` loads the extensions from the package; **do not also copy `extensions/*.ts` into
+`~/.pi/agent/extensions/`**, or each loads twice and you get two status bars. `scripts/install.sh`
+never overwrites — an existing file is reported and left alone, so re-running it is safe. The
+`lab` argument copies this lab's `models.json` (SSH-tunnelled vLLM plus the ALCF gateway) and puts
+`globus-tunnel` and `alcf-token` in `~/.local/bin`; use `example` instead to get a `rounds.json`
+template to edit for your own endpoints.
 
 Add `"tuiMode": "fullscreen"` to `~/.pi/agent/settings.json` — the right-hand column needs it.
 Regular mode draws into the terminal's own scrollback and has no layout root to rebuild, so the
@@ -691,14 +621,20 @@ session is unaffected.
 
 ## 14. Review rounds: `agents/` + `rounds.ts`
 
-Three agent files define the roles. The reviewer and critic are pinned to **different endpoints
-from the dev**, so a change is never graded only by the model that wrote it:
+Three agent files define the roles; **which model each runs on is `rounds.json`**, not the agent
+files — those carry no model pin (CI rejects one), because a spawn-time model outranks agent
+frontmatter and one file is the only place endpoints should be decided. With the shipped lab
+config (`profiles/lab/rounds.json`, installed to `~/.pi/agent/rounds.json`):
 
-| Role | Model | Job |
-|---|---|---|
-| `dev` | session default (lab endpoint) | Implements one change and verifies it |
-| `reviewer` | `alcf-minerva/gpt-oss-120b` | Finds real defects; each needs a failure scenario |
-| `critic` | `alcf-metis/gpt-oss-120b` | Verifies the review, throws out what doesn't hold |
+| Role | Seat | Model | Job |
+|---|---|---|---|
+| `dev` | — | session default (lab endpoint) | Implements one change and verifies it |
+| `reviewer` | A | `alcf-minerva/gpt-oss-120b` | Finds real defects; each needs a failure scenario |
+| `reviewer` | B | `alcf-minerva/nemotron-3-ultra` | Same brief, different weights |
+| `critic` | — | `alcf-metis/gpt-oss-120b` | Verifies the reviews, throws out what doesn't hold |
+
+A project `.pi/rounds.json` overrides the global one. A model this machine cannot resolve is dropped
+and that seat inherits the session's model, so the config degrades rather than failing.
 
 ```
 /round <task>               dev → review → critique
@@ -709,8 +645,11 @@ from the dev**, so a change is never graded only by the model that wrote it:
 /rounds                     past reports; pick one to pull back into the conversation
 ```
 
-Review is a **panel**: the reviewer role runs on two endpoints at once (Minerva and Sophia) and
-the critic sees both, merging findings that are the same defect. A seat that returns nothing —
+Review is a **panel**: the reviewer role runs twice at once on *different weights* (with the lab
+config, gpt-oss-120b and nemotron-3-ultra, both on Minerva) and the critic sees both, merging
+findings that are the same defect. Two copies of one model share its blind spots; a second seat
+that differs only by cluster mostly buys redundancy against a flaky gateway, which the retry below
+already provides. A seat that returns nothing —
 gpt-oss models occasionally end a turn having produced only reasoning — is retried once, then
 dropped; the round continues with one viewpoint rather than failing.
 
@@ -739,9 +678,10 @@ pi
 1. **Endpoints.** `/endpoints` lists globus plus the three ALCF clusters, each live / queued / cold.
 2. **Column.** The right-hand column shows ENDPOINT, MODEL, CONTEXT, USAGE. Narrow the terminal
    below 72 columns: it becomes a two-line footer. Widen it: the column returns.
-3. **Round.** `/review` runs two reviewers and a critic — the fleet list should show three agents
-   on three different endpoints (`↗ ALCF Minerva`, `↗ ALCF Sophia`, `↗ ALCF Metis`) — then prints
-   a verdict and writes `.pi/rounds/<timestamp>.md`.
+3. **Round.** `/review` runs two reviewers and a critic — the fleet list should show three agents,
+   the two reviewers on `↗ ALCF Minerva` (different models) and the critic on `↗ ALCF Metis` —
+   then prints a verdict and writes `.pi/rounds/<timestamp>.md`. If a seat's model is not
+   resolvable on this machine, that seat shows the session's own endpoint instead.
 4. **Attach.** While a round is running, press ↓ then Enter on an agent row: the transcript
    becomes that agent's and the column shows its model and context. Esc detaches.
 5. **Stop.** Start `/review` again and run `/round stop` — running agents stop, and a partial

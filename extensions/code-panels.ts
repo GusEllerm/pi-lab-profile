@@ -10,8 +10,9 @@
  * background color, not gutter characters, so copying a selection yields clean code.
  *
  * Display-only: the session and model context keep the original Markdown.
- * Written against Pi 0.85.1; if a Pi update changes renderToken, the guard below falls back to
- * Pi's own rendering rather than breaking the transcript.
+ * Written against Pi 0.85.1 and verified through 0.87.0 (the README carries the current number);
+ * if a Pi update changes renderToken, the guard below falls back to Pi's own rendering rather than
+ * breaking the transcript.
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { highlightCode } from "@earendil-works/pi-coding-agent";

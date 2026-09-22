@@ -5,7 +5,7 @@ endpoints: a right-hand status column instead of a crowded footer, an interactiv
 can **attach** to, and a `/round` command that puts a change through **dev → review → critique**
 with each role on a different model.
 
-Built and tested against **Pi 0.86.1** on macOS.
+Built against **Pi 0.86.1** and verified on **0.87.0** on macOS.
 
 ```bash
 pi install git:github.com/GusEllerm/pi-lab-profile
@@ -35,6 +35,8 @@ regular mode draws into the terminal's own scrollback and has no layout root to 
 | `/agent-model` | move a *running* subagent to another endpoint mid-run |
 | `/endpoints` | which clusters are live, queued or cold, and which model a provider will really hit |
 | `/status` · `/sidebar` | the dashboard, and the column on/off |
+| `/open` | everything substantial from the session — reasoning, bash runs, diffs, writes — in full, in a picker; hand off to `$EDITOR` |
+| `/pin` | the pinned copy of your last message above the transcript, on/off |
 | `/images` | keep only the newest N images in context |
 
 ### The review panel
@@ -78,7 +80,7 @@ Run your own before trusting any model in the critic seat.
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · code-panels · image-window
+extensions/     statusbar · fleet · rounds · endpoints · outputs · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
 profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), bin helpers
 profiles/example/  a rounds.json template
@@ -112,7 +114,7 @@ everything and no sync step:
 
 ```bash
 pi install ~/Projects/pi-lab-profile          # extensions load from the tree, not a copy
-rm ~/.pi/agent/extensions/{statusbar,fleet,rounds,endpoints,code-panels,image-window}.ts
+rm ~/.pi/agent/extensions/{statusbar,fleet,rounds,endpoints,outputs,code-panels,image-window}.ts
 ln -sf "$PWD"/agents/{dev,reviewer,critic}.md ~/.pi/agent/agents/
 ln -sf "$PWD"/profiles/lab/rounds.json ~/.pi/agent/rounds.json
 ```
