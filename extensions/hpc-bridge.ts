@@ -38,8 +38,22 @@ export type HpcState = {
 	/** when the block was last seen warm */
 	warmSince?: number;
 	lastTool?: string;
+	/** when the last non-error hpc result arrived: warmth is only trusted this fresh */
 	at?: number;
+	/** spend has been acknowledged this session -- from then on the server re-provisions without asking */
+	spendConfirmed?: boolean;
+	/** the MCP server stopped answering pings */
+	serverDown?: number;
 };
+
+/**
+ * hpc-bridge's idle-release window (max_idletime, 600s on the Globus Labs MEP). A block not heard
+ * from for longer may have been released; the server itself only finds out on its next call, and
+ * that call re-provisions if spend was ever confirmed. So a result older than this is not evidence
+ * of a warm block, for the row or for the gate.
+ */
+export const IDLE_S = Number(process.env.PI_HPC_IDLE_S) || 600;
+export const isFresh = (s: HpcState, now = Date.now()): boolean => s.block === "warm" && s.at !== undefined && now - s.at < IDLE_S * 1000;
 
 /** The first JSON object in a tool's text output; hpc-bridge returns pydantic models as JSON. */
 export function parseResult(text: string): Record<string, unknown> | undefined {
@@ -92,6 +106,7 @@ export function applyResult(state: HpcState, tool: string, result: Record<string
 	}
 	if (next.block === "warm") next.warmSince ??= now;
 	else if (next.block === "cold") next.warmSince = undefined;
+	if (next.block === "warm" || next.block === "provisioning") next.spendConfirmed = true;
 	return next;
 }
 
@@ -117,18 +132,29 @@ export function describe(s: HpcState, now = Date.now()): { text: string; state: 
 		const idle = ["no facility connected", "ask: what HPC facilities can I use?"];
 		return { text: "hpc –", state: "idle", column: idle, full: idle };
 	}
-	const spending = s.block === "warm" || s.block === "provisioning";
+	const facility = s.facility ?? "?";
+	if (s.serverDown !== undefined) {
+		const rows = [facility, `server down ${warmFor(s.serverDown, now)}`];
+		return { text: `hpc server down`, state: "error", column: rows, full: [...rows, "the MCP server stopped answering pings; /mcp"] };
+	}
+	// Warmth is trusted only as long as the idle window: after that the block may have been released
+	// and the server would not know either -- say so rather than count up a block that may be gone.
+	const stale = s.block === "warm" && s.at !== undefined && now - s.at >= IDLE_S * 1000;
+	const spending = !stale && (s.block === "warm" || s.block === "provisioning");
 	const state: SlotState =
 		s.status === "failed" || s.status === "unsupported"
 			? "error"
-			: s.status?.startsWith("needs_") || s.status === "draining" || s.status === "tearing_down"
+			: stale || s.status?.startsWith("needs_") || s.status === "draining" || s.status === "tearing_down"
 				? "warn"
 				: spending
 					? "busy"
 					: "ok";
-	const facility = s.facility ?? "?";
 	const status = s.status?.replace(/_/g, " ");
-	const block = s.block === "warm" && s.warmSince !== undefined ? `warm ${warmFor(s.warmSince, now)}` : s.block;
+	const block = stale
+		? `warm? no news ${warmFor(s.at as number, now)}`
+		: s.block === "warm" && s.warmSince !== undefined
+			? `warm ${warmFor(s.warmSince, now)}`
+			: s.block;
 	const where = [s.partition, s.account].filter(Boolean).join(" · ");
 	const spend = s.spend !== undefined && (s.block !== undefined || s.spend > 0) ? `${s.spend.toFixed(2)} node-h` : "";
 	const column = [
@@ -143,6 +169,7 @@ export function describe(s: HpcState, now = Date.now()): { text: string; state: 
 		...(s.partition || s.account ? [`partition ${s.partition ?? "default"} · account ${s.account ?? "default"}`] : []),
 		...(spend ? [`spent ${spend} this session`] : []),
 		...(s.notice ? [s.notice] : []),
+		...(stale ? ["the next hpc_* call will re-check, and may restart the block"] : []),
 		...(spending ? ["release the block: hpc_stop_endpoint"] : []),
 	];
 	const head = spending ? `${facility} · ${block}` : `${facility} · ${status ?? "connected"}`;
@@ -150,7 +177,7 @@ export function describe(s: HpcState, now = Date.now()): { text: string; state: 
 }
 
 /** The bridge's tool prefix for the hpc-bridge server, from the same config it reads. */
-export function hpcPrefix(cwd: string): string | undefined {
+export function hpcServer(cwd: string): { name: string; prefix: string } | undefined {
 	let servers: ReturnType<typeof readConfig>;
 	try {
 		servers = readConfig(cwd);
@@ -159,15 +186,18 @@ export function hpcPrefix(cwd: string): string | undefined {
 	}
 	for (const [name, spec] of Object.entries(servers)) {
 		const argv = [spec.command, ...(spec.args ?? [])].join(" ");
-		if (/hpc-bridge/.test(argv)) return spec.prefix === false ? "" : `${spec.prefix ?? name}_`;
+		if (/hpc-bridge/.test(argv)) return { name, prefix: spec.prefix === false ? "" : `${spec.prefix ?? name}_` };
 	}
 	return undefined;
 }
+export const hpcPrefix = (cwd: string): string | undefined => hpcServer(cwd)?.prefix;
 
 export default function (pi: ExtensionAPI): void {
 	let dead = false;
 	let state: HpcState = {};
-	const prefix = hpcPrefix(process.cwd());
+	const server = hpcServer(process.cwd());
+	const prefix = server?.prefix;
+	const hpcServerName = server?.name;
 	const tool = (base: string) => `${prefix ?? "hpc_"}${base}`;
 	const baseOf = (toolName: string): string | undefined =>
 		prefix !== undefined && toolName.startsWith(prefix) ? toolName.slice(prefix.length) : undefined;
@@ -195,8 +225,16 @@ export default function (pi: ExtensionAPI): void {
 			if (looksLikeCredential(command)) return { block: true, reason: CREDENTIAL_REASON };
 		}
 
-		// The spend gate. hpc-bridge trusts the model to have asked; this does not.
-		if (base === "ensure_endpoint_up" && input?.confirm_spend === true) {
+		// The spend gate. hpc-bridge trusts the model to have asked; this does not. And it is not the
+		// confirm_spend flag that starts blocks: once spend is acknowledged the server keeps that for
+		// the session, and every later ensure_endpoint_up -- or run_shell, which provisions on its
+		// way to running -- re-allocates a billed block if the current one is cold. So the question
+		// is "could this call provision?": an explicit confirm_spend=true, or any provisioning call
+		// after spend was confirmed when the block is not provably warm within the idle window.
+		const provisions = (base === "ensure_endpoint_up" || base === "run_shell") && (input?.shape ?? "compute") !== "login";
+		const explicit = base === "ensure_endpoint_up" && input?.confirm_spend === true;
+		const restart = provisions && !explicit && state.spendConfirmed === true && !isFresh(state);
+		if (explicit || restart) {
 			if (!ctx.hasUI) {
 				if (process.env.PI_HPC_HEADLESS_SPEND === "allow") return undefined;
 				return {
@@ -208,13 +246,22 @@ export default function (pi: ExtensionAPI): void {
 			const partition = typeof input.partition === "string" ? input.partition : (state.partition ?? "the facility default");
 			const account = typeof input.account === "string" ? input.account : (state.account ?? "the facility default");
 			const ok = await ctx.ui.confirm(
-				"Start a billed compute block?",
+				restart ? "Restart a billed compute block?" : "Start a billed compute block?",
 				`Facility: ${state.facility ?? "not yet connected"}\nPartition: ${partition}\nAccount: ${account}\n\n` +
-					"This allocates a scheduler node and charges the allocation until it is released (hpc_stop_endpoint) or idles out.",
+					(restart
+						? `Spend was confirmed earlier this session and the block has not been heard from for ${state.at ? warmFor(state.at, Date.now()) : "a while"} -- it may have idled out. ` +
+							`${base === "run_shell" ? "Running this command" : "This call"} will allocate a new scheduler node if so, charging the allocation until it is released.`
+						: "This allocates a scheduler node and charges the allocation until it is released (hpc_stop_endpoint) or idles out."),
 			);
 			if (!ok) {
-				return { block: true, reason: "The user declined to start a billed compute block. Do not retry with confirm_spend=true unless they ask for it." };
+				return {
+					block: true,
+					reason: restart
+						? "The user declined to restart a billed compute block. Ask them before calling hpc tools that provision again."
+						: "The user declined to start a billed compute block. Do not retry with confirm_spend=true unless they ask for it.",
+				};
 			}
+			if (explicit) state = { ...state, spendConfirmed: true }; // the server will remember it too
 		}
 		return undefined;
 	});
@@ -234,6 +281,12 @@ export default function (pi: ExtensionAPI): void {
 		publish();
 	});
 	pi.events.on("statusbar:ready", () => publish());
+	pi.events.on("mcp:server", (data) => {
+		const { name, up, since } = (data ?? {}) as { name?: string; up?: boolean; since?: number };
+		if (!name || !hpcServerName || name !== hpcServerName) return;
+		state = { ...state, serverDown: up ? undefined : (since ?? Date.now()) };
+		publish();
+	});
 	pi.on("session_shutdown", () => {
 		dead = true;
 	});

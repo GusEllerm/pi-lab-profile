@@ -1,6 +1,6 @@
 ---
 source: extensions/hpc-bridge.ts
-source-hash: d1297ffa6b7acd7ebaadcd022d8815a7b9b43b30
+source-hash: d311a6a2148137059b0aa83197ab7e9a01be2ac6
 documented: 2026-09-22
 ---
 
@@ -35,6 +35,29 @@ the model; in the column it wrapped into seven rows cut mid-word, which is why i
   `draining`, `tearing_down`, `error` on `failed`. `/hpc` prints the same.
 - **The tool prefix follows `mcp.json`** (`hpcPrefix`): the server whose command mentions
   `hpc-bridge`, honouring a custom or empty `prefix`.
+
+### The gate keys on provisioning, not on the flag (22 Sept 2026)
+
+The first version gated only `confirm_spend: true`. That covers the *first* allocation and nothing
+after it: once spend is acknowledged, hpc-bridge keeps `spend_confirmed` for the session
+(`warmth.py:194–204`), and every later `_provision` — from `ensure_endpoint_up` with any flag, or
+from `run_shell`, which provisions on its way to running (`_ensure_warm_runner`) — re-allocates a
+billed block if the current one is cold, with no flag in sight. So the question is now "could this
+call provision?": an explicit `confirm_spend: true`, **or** any provisioning call on a non-login
+shape after spend was confirmed this session when the block is not provably warm within the idle
+window. The dialog then says *Restart*, names how long since the last news, and explains that the
+block may have idled out. Fresh warmth (a warm result within `IDLE_S`, 600 s) lets commands flow
+without asking.
+
+**Warmth has a TTL.** There is no read-only status probe in hpc-bridge: `ensure_endpoint_up` runs a
+canary task on every call (`force_canary=True`) and re-provisions a cold block once spend was
+confirmed; block state is in the server's memory only; a released block is discovered only by the
+next call. So the row treats "warm" as a fact that ages out after the facility's idle window — it
+turns `warn` and reads `warm? no news 12m` — rather than polling something that spends. The honest
+fix is upstream: a read-only `endpoint_status` tool (~30 lines in `server.py`) reporting the
+in-memory runtime; the hpc-bridge session confirmed both the gap and the fix, and it is Gus's call.
+
+`server down Nm` (error) appears when the bridge's heartbeat loses the server.
 
 ## Invariants a future change must not break
 

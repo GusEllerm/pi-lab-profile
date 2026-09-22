@@ -9,6 +9,10 @@ server.tool("echo", "Echo the text back, optionally shouting", { text: z.string(
 	content: [{ type: "text", text: shout ? text.toUpperCase() : text }],
 }));
 server.tool("fail", "Always fails", {}, async () => ({ content: [{ type: "text", text: "as requested" }], isError: true }));
+server.tool("die", "Exit shortly after replying, so a heartbeat can notice", {}, async () => {
+	setTimeout(() => process.exit(0), 30);
+	return { content: [{ type: "text", text: "bye" }] };
+});
 server.resource("guidance", "fixture://guidance", { mimeType: "text/markdown" }, async (uri) => ({
 	contents: [{ uri: uri.href, mimeType: "text/markdown", text: "# How to use the fixture\n\nCall echo." }],
 }));

@@ -1,6 +1,6 @@
 ---
 documented: 2026-09-22
-status: A + C built (extensions/mcp.ts) and B built (extensions/hpc-bridge.ts); all verified live
+status: A + C built (extensions/mcp.ts) and B built (extensions/hpc-bridge.ts); all verified live. Open upstream ask: a read-only endpoint_status tool, so block liveness can be polled without spend
 sources: hpc-bridge repo at ~/Projects/hpc-bridge (main, plugin 0.1.17), its vault, and the hpc-bridge Claude session's inventory; Pi 0.87.0 docs and types
 ---
 

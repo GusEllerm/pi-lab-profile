@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import layer, { applyResult, describe, hpcPrefix, looksLikeCredential, parseResult } from "../extensions/hpc-bridge.ts";
+import layer, { IDLE_S, applyResult, describe, hpcPrefix, isFresh, looksLikeCredential, parseResult } from "../extensions/hpc-bridge.ts";
 
 function fakePi() {
 	const handlers = new Map();
@@ -15,6 +15,7 @@ function fakePi() {
 	const commands = new Map();
 	return {
 		handlers, emitted, commands,
+		bus,
 		on: (event, h) => { handlers.set(event, h); return () => {}; },
 		events: { on: (e, h) => { bus.set(e, h); return () => {}; }, emit: (e, p) => emitted.push([e, p]) },
 		registerCommand: (name, opts) => commands.set(name, opts),
@@ -100,12 +101,17 @@ test("the spend gate: declined blocks, accepted allows, confirm_spend=false neve
 		assert.match(declined.reason, /declined/);
 		assert.match(asked[0][1], /Partition: gpu/);
 
-		const accepted = await call({ type: "tool_call", toolCallId: "2", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: true } }, ctx(true));
-		assert.equal(accepted, undefined, "an accepted call proceeds untouched");
-
+		// before any accepted allocation, confirm_spend=false provisions nothing (the server's own
+		// floor answers needs_confirmation), so there is nothing to ask about
 		const noSpend = await call({ type: "tool_call", toolCallId: "3", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: false } }, ctx(false));
 		assert.equal(noSpend, undefined);
-		assert.equal(asked.length, 2, "confirm_spend=false does not ask");
+		assert.equal(asked.length, 1, "confirm_spend=false does not ask while spend is unconfirmed");
+
+		const accepted = await call({ type: "tool_call", toolCallId: "2", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: true } }, ctx(true));
+		assert.equal(accepted, undefined, "an accepted call proceeds untouched");
+		assert.equal(asked.length, 2);
+		// from here spend is confirmed and no warm result has arrived, so a provisioning call asks again
+		// (as a restart) -- covered in detail by "the gate keys on provisioning, not on the flag"
 
 		const headless = await call({ type: "tool_call", toolCallId: "4", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: true } }, { hasUI: false, ui: {} });
 		assert.equal(headless.block, true);
@@ -141,5 +147,85 @@ test("results publish the hpc slot for the column", async () => {
 		await pi.commands.get("hpc").handler("", { ui: { notify: (m) => notes.push(m) } });
 		assert.match(notes[0], /block warm/);
 		assert.doesNotMatch(slot.details().join("\n"), /release the block/, "the column carries no prose");
+	} finally { restore(); }
+});
+
+test("warmth is a fact with a TTL: fresh within the idle window, aged out after it", () => {
+	const t0 = 1_000_000;
+	const warm = applyResult({}, "ensure_endpoint_up", { status: "up", block_state: "warm", session_spend: 0 }, t0);
+	assert.equal(warm.spendConfirmed, true, "a warm block means spend was acknowledged server-side");
+	assert.equal(isFresh(warm, t0 + 60_000), true);
+	assert.equal(isFresh(warm, t0 + IDLE_S * 1000 + 1), false);
+	const aged = describe({ ...warm, facility: "globus-labs", warmSince: t0 }, t0 + (IDLE_S + 120) * 1000);
+	assert.equal(aged.state, "warn");
+	assert.match(aged.column[1], /warm\? no news 12m/);
+	assert.ok(aged.full.some((d) => /may restart the block/.test(d)));
+	assert.equal(describe({ facility: "x", block: "warm", serverDown: t0, at: t0 }, t0 + 3 * 60_000).state, "error");
+	assert.deepEqual(describe({ facility: "x", block: "warm", serverDown: t0, at: t0 }, t0 + 3 * 60_000).column, ["x", "server down 3m"]);
+});
+
+test("the gate keys on provisioning, not on the flag", async () => {
+	const restore = withConfig("hpc");
+	try {
+		const pi = fakePi();
+		layer(pi);
+		const call = pi.handlers.get("tool_call");
+		const result = pi.handlers.get("tool_result");
+		const asked = [];
+		const ctx = (answer) => ({ hasUI: true, ui: { confirm: async (title, msg) => { asked.push([title, msg]); return answer; } } });
+		const ensure = (input, c) => call({ type: "tool_call", toolCallId: "e", toolName: "hpc_ensure_endpoint_up", input }, c);
+		const run = (input, c) => call({ type: "tool_call", toolCallId: "r", toolName: "hpc_run_shell", input }, c);
+
+		// before any confirmation: the server's own floor answers needs_confirmation without provisioning, so no dialog
+		assert.equal(await ensure({ confirm_spend: false }, ctx(true)), undefined);
+		assert.equal(await run({ command: "hostname" }, ctx(true)), undefined);
+		assert.equal(asked.length, 0);
+
+		// the explicit first allocation asks, and an accepted one marks spend as confirmed
+		assert.equal(await ensure({ confirm_spend: true, partition: "main" }, ctx(true)), undefined);
+		assert.equal(asked.length, 1);
+		assert.match(asked[0][0], /^Start/);
+
+		// a fresh warm result: commands flow without asking
+		result({ type: "tool_result", toolCallId: "1", toolName: "hpc_ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"up","block_state":"warm","session_spend":0.01}' }] });
+		assert.equal(await run({ command: "hostname" }, ctx(true)), undefined);
+		assert.equal(await ensure({ confirm_spend: false }, ctx(true)), undefined);
+		assert.equal(asked.length, 1, "nothing asked while the block is provably warm");
+
+		// the login shape is free and never asks
+		assert.equal(await run({ command: "sinfo", shape: "login" }, ctx(true)), undefined);
+
+		// after the idle window with no news, a plain run_shell could restart a block: ask, as a restart
+		const realNow = Date.now;
+		try {
+			Date.now = () => realNow() + (IDLE_S + 60) * 1000;
+			const blocked = await run({ command: "hostname" }, ctx(false));
+			assert.equal(blocked.block, true);
+			assert.match(asked[1][0], /^Restart/);
+			assert.match(asked[1][1], /may have idled out/);
+			assert.match(blocked.reason, /declined to restart/);
+			const allowed = await ensure({ confirm_spend: false }, ctx(true));
+			assert.equal(allowed, undefined, "accepted: the call proceeds");
+			assert.equal(asked.length, 3);
+		} finally {
+			Date.now = realNow;
+		}
+	} finally { restore(); }
+});
+
+test("a server that stops answering shows in the row", () => {
+	const restore = withConfig("hpc");
+	try {
+		const pi = fakePi();
+		layer(pi);
+		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "1", toolName: "hpc_connect_facility", isError: false, content: [{ type: "text", text: '{"phase":"provisioning","facility":"globus-labs"}' }] });
+		pi.bus.get("mcp:server")({ name: "hpc", up: false, since: Date.now() - 120_000 });
+		let [, slot] = pi.emitted.at(-1);
+		assert.equal(slot.state, "error");
+		assert.match(slot.text, /server down/);
+		pi.bus.get("mcp:server")({ name: "other", up: false, since: Date.now() }); // not ours: ignored
+		pi.bus.get("mcp:server")({ name: "hpc", up: true });
+		[, slot] = pi.emitted.at(-1);
+		assert.notEqual(slot.state, "error");
 	} finally { restore(); }
 });

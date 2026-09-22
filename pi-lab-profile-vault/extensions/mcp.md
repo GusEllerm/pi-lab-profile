@@ -1,6 +1,6 @@
 ---
 source: extensions/mcp.ts
-source-hash: f594d748c63b84e3354bba6794aaa72c9653b508
+source-hash: 8d31dee967ec6d2be82beac18548d63debc6fdb9
 documented: 2026-09-22
 ---
 
@@ -44,6 +44,16 @@ by `scripts/install.sh lab`), twelve tools and the `driving-hpc` guidance as a s
 - **Startup** — the default export is `async`: Pi awaits it before `session_start`, so every tool
   exists before the first prompt. Servers start in parallel; one that cannot start is recorded and
   shown by `/mcp` and in the `session_start` notice, never fatal.
+
+### Heartbeat (22 Sept 2026)
+
+Every 30 s (`PI_MCP_PING_MS`) each server gets a protocol-level `ping` — the one liveness check
+that costs a server nothing and touches nothing behind it. A server that stops answering is marked
+`down`: `/mcp` says `DOWN since …`, its tools return an error naming the time instead of hanging,
+and `mcp:server {name, up, since}` goes out on the bus (which is how [[hpc-bridge]]'s row shows
+`server down`). It comes back the same way. The ticker is cleared on `session_shutdown` — a timer
+is the one thing here that would outlive the activation. **This is process liveness only**: it
+says nothing about a compute block behind hpc-bridge, which has no read-only status tool.
 
 ## Invariants a future change must not break
 

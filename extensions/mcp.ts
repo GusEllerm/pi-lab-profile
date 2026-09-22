@@ -52,6 +52,8 @@ type ServerSpec = {
 type Config = { servers?: Record<string, ServerSpec> };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** Protocol-level ping, every 30s: the one liveness check that costs a server nothing. */
+const PING_MS = Number(process.env.PI_MCP_PING_MS) || 30_000;
 const CACHE_DIR = join(homedir(), ".pi", "agent", "cache", "mcp");
 
 const expandHome = (p: string) => (p === "~" ? homedir() : p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
@@ -109,7 +111,7 @@ export function flattenContent(content: Array<{ type: string; text?: string; mim
 	return parts.join("\n").trim();
 }
 
-type Live = { name: string; spec: ServerSpec; client: Client; tools: string[]; skills: string[]; startedAt: number };
+type Live = { name: string; spec: ServerSpec; client: Client; tools: string[]; skills: string[]; startedAt: number; down?: number; ticker?: ReturnType<typeof setInterval> };
 
 export default async function (pi: ExtensionAPI): Promise<void> {
 	let dead = false;
@@ -148,6 +150,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				async execute(_id, params, signal) {
 					const current = live.get(name);
 					if (!current) return { content: [{ type: "text", text: `MCP server ${name} is not connected` }], isError: true };
+					if (current.down !== undefined)
+						return { content: [{ type: "text", text: `MCP server ${name} has not answered since ${new Date(current.down).toLocaleTimeString()}; /mcp shows its state` }], isError: true };
 					try {
 						const result = (await current.client.callTool({ name: tool.name, arguments: params as Record<string, unknown> }, undefined, {
 							timeout,
@@ -179,7 +183,35 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			}
 		}
 		live.set(name, entry);
+
+		// Liveness of the *process*, not of anything behind it: MCP's ping is answered by the server
+		// itself and touches nothing. A server that stops answering is marked down, its tools say so,
+		// and the bus hears about it so a row that depends on it can stop claiming things.
+		entry.ticker = setInterval(() => {
+			if (dead) return;
+			void entry.client
+				.ping({ timeout: Math.min(PING_MS, 10_000) })
+				.then(() => {
+					if (entry.down === undefined) return;
+					entry.down = undefined;
+					emit("mcp:server", { name, up: true });
+				})
+				.catch(() => {
+					if (dead || entry.down !== undefined) return;
+					entry.down = Date.now();
+					emit("mcp:server", { name, up: false, since: entry.down });
+				});
+		}, PING_MS);
 	}
+
+	const emit = (event: string, payload: unknown) => {
+		if (dead) return;
+		try {
+			pi.events.emit(event, payload);
+		} catch {
+			dead = true;
+		}
+	};
 
 	// Awaited before session_start, so every tool exists before the first prompt.
 	let servers: Record<string, ServerSpec> = {};
@@ -213,7 +245,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	// and a tool registered by it would otherwise forward to a client whose owner is dead.
 	pi.on("session_shutdown", () => {
 		dead = true;
-		for (const s of live.values()) void s.client.close().catch(() => {});
+		for (const s of live.values()) {
+			if (s.ticker) clearInterval(s.ticker); // a timer is the one thing here that outlives the activation
+			void s.client.close().catch(() => {});
+		}
 		live.clear();
 	});
 
@@ -227,7 +262,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				return ctx.ui.notify(s ? `${which}: ${s.tools.join(", ")}` : `no server named ${which}`, s ? "info" : "warning");
 			}
 			const rows = [...live.values()].map(
-				(s) => `${s.name}: ${s.tools.length} tools${s.skills.length ? `, skills ${s.skills.join(", ")}` : ""} · up ${Math.round((Date.now() - s.startedAt) / 1000)}s · ${s.spec.command} ${(s.spec.args ?? []).join(" ")}`,
+				(s) =>
+					`${s.name}: ${s.tools.length} tools${s.skills.length ? `, skills ${s.skills.join(", ")}` : ""} · ` +
+					(s.down !== undefined ? `DOWN since ${new Date(s.down).toLocaleTimeString()}` : `up ${Math.round((Date.now() - s.startedAt) / 1000)}s`) +
+					` · ${s.spec.command} ${(s.spec.args ?? []).join(" ")}`,
 			);
 			if (!rows.length && !errors.length) rows.push("no MCP servers configured — see ~/.pi/agent/mcp.json or .pi/mcp.json");
 			ctx.ui.notify([...rows, ...errors.map((e) => `! ${e}`)].join("\n"), errors.length ? "warning" : "info");
