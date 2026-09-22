@@ -1,6 +1,6 @@
 ---
 source: extensions/fleet.ts
-source-hash: c36166e8d06bfd93cd14d5ed863c17d067dfbaad
+source-hash: 6dcc4e9968ce9978ea13fe5a1a771fc8d7a24f27
 documented: 2026-09-20
 ---
 
@@ -180,6 +180,13 @@ The `s` (steer) key launched `ctx.ui.input(...).then(...)` with no `.catch`. pi 
 `unhandledRejection` handler, so a rejected `steer()` — or a `notify` on an activation that went
 stale during it — would have exited the process. It now has a `.catch` and a `dead` check after the
 await, matching the `input` hook and `/agent-model` beside it.
+
+### 22 Sept 2026 lows
+
+Deleted: `transcript()`, `forget`, `Tracked.outputTokens` (all confirmed unreferenced). The 500 ms
+ticker now re-checks the roster from inside its own body: only `render()` used to re-evaluate it,
+and a session without UI never renders, so after the last agent aged out a headless session kept
+emitting a `statusbar:slot` every half second until shutdown.
 
 ## Invariants a future change must not break
 

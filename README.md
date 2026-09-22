@@ -95,8 +95,10 @@ column beside the transcript) and the markdown renderer's `renderToken` (to draw
 without ``` fences). **Both are checked before use** — if a Pi release changes their shape, that
 feature switches itself off and the rest of the session is untouched.
 
-`scripts/check.sh` parses every extension and boots Pi once looking for load failures. Run it after
-any edit, and after any Pi upgrade; CI runs the parse half on every push.
+`scripts/check.sh` parses every extension and boots Pi once, requiring a reply. Run it after any
+edit, and after any Pi upgrade; CI runs the parse half and the unit tests on every push, and a weekly
+job installs the current Pi and pi-cc to run the three upstream canaries — a failing canary means
+upstream fixed a bug this profile works around, and the workaround should be deleted.
 
 ## Requires
 

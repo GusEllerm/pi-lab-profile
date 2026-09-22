@@ -8,13 +8,24 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "extensions", "statusbar.ts"), "utf8");
-const body = src
-	.slice(src.indexOf("const SPARK ="), src.indexOf("/** Read-only overlay:"))
-	.replace("class ContextTrail {", "class ContextTrail {")
-	.replace("private samples: { at: number; used: number }[] = [];", "samples = [];")
-	.replace("sample(used: number): void", "sample(used)")
-	.replace("rate(): number | undefined", "rate()")
-	.replace("spark(width: number): string", "spark(width)");
+// Markers and every TS strip are asserted: a moved marker or a changed signature used to surface
+// as a bare SyntaxError from new Function, with no mention of what had moved.
+const slice = (start, end) => {
+	const a = src.indexOf(start);
+	const b = src.indexOf(end, a + 1);
+	assert.ok(a !== -1, `marker not found in statusbar.ts: ${start}`);
+	assert.ok(b !== -1, `marker not found in statusbar.ts after ${start}: ${end}`);
+	return src.slice(a, b);
+};
+const strip = (text, from, to) => {
+	assert.ok(text.includes(from), `ContextTrail changed; update this test's strip (looked for: ${from})`);
+	return text.replace(from, to);
+};
+let body = slice("const SPARK =", "/** Read-only overlay:");
+body = strip(body, "private samples: { at: number; used: number }[] = [];", "samples = [];");
+body = strip(body, "sample(used: number): void", "sample(used)");
+body = strip(body, "rate(): number | undefined", "rate()");
+body = strip(body, "spark(width: number): string", "spark(width)");
 const ContextTrail = new Function(`${body}; return ContextTrail;`)();
 
 /** Samples are rate-limited to ~1s, so drive the clock rather than the sampler. */

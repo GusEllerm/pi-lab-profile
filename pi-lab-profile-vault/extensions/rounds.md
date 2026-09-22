@@ -1,6 +1,6 @@
 ---
 source: extensions/rounds.ts
-source-hash: 8564b6916b510d7819e6c44add9289c384897217
+source-hash: b8bf07c3b92b2c8428502a172039613f50bb8337
 documented: 2026-09-20
 ---
 
@@ -186,6 +186,18 @@ next dev round the critique **minus its REJECTED blocks**; it used to receive th
 `tests/round-tally.test.mjs`. Also: `running` is now claimed *before* the readiness await, so two
 commands in that window can no longer share one round's state; `parse()` and `round()` apply the
 same default when `"panel": []`; the critic prompt says how many reviewers there were.
+
+### 22 Sept 2026 lows
+
+`timeoutMinutes` in `rounds.json` now does what it says: `round()` reads it (default 20) and passes
+it to every `runPhase` as the completion timeout — it was declared, defaulted, shipped in the lab
+config, and never read. Each `## <phase>` heading in the report carries `(1m12s · 38k tok)` from the
+`durationMs`/`tokens.total` pi-subagents puts on every outcome. `writeReport` writes with `wx` and a
+random suffix (second-granular stamps collided and silently overwrote) and returns the error, which
+the final notify shows instead of quietly omitting the path. `/rounds` selects by index, since two
+rounds with one task and verdict share a label. `AgentOutcome.durationMs/tokens` are read now.
+Still open: the early-failure window between the spawn reply and the completion subscription
+(unverified in practice).
 
 ## Invariants a future change must not break
 

@@ -28,7 +28,7 @@ type SpawnReply = { id?: string; error?: string };
 type AgentOutcome = { status?: string; result?: string; error?: string; durationMs?: number; tokens?: { total?: number } };
 type Phase = { role: string; title: string; outcome: AgentOutcome };
 
-const SPAWN_TIMEOUT_MS = 20 * 60_000; // a phase that never reports back should not hang the run forever
+const DEFAULT_TIMEOUT_MINUTES = 20; // a phase that never reports back should not hang the run forever; rounds.json can change it
 const SPAWN_REPLY_MS = 30_000;
 
 type Seat = { model?: string; label: string };
@@ -51,7 +51,7 @@ type RoundsConfig = { dev?: string; panel?: Seat[]; critic?: string; timeoutMinu
  */
 const DEFAULTS: Required<Pick<RoundsConfig, "panel" | "timeoutMinutes">> = {
 	panel: [{ label: "reviewer A" }, { label: "reviewer B" }],
-	timeoutMinutes: 20,
+	timeoutMinutes: DEFAULT_TIMEOUT_MINUTES,
 };
 
 function readConfig(cwd: string): RoundsConfig {
@@ -156,7 +156,7 @@ export default function (pi: ExtensionAPI): void {
 		);
 
 	/** Spawn one role through pi-subagents' RPC and wait for its result. */
-	async function runPhase(role: string, description: string, prompt: string, model?: string): Promise<AgentOutcome> {
+	async function runPhase(role: string, description: string, prompt: string, model?: string, timeoutMs = DEFAULT_TIMEOUT_MINUTES * 60_000): Promise<AgentOutcome> {
 		if (dead) return RELOADED;
 		const spawn = (withModel?: string) =>
 			new Promise<SpawnReply>((resolve) => {
@@ -232,8 +232,8 @@ export default function (pi: ExtensionAPI): void {
 				// The agent is still running; forgetting it would leave it unreachable by /round stop,
 				// its eventual completion nudged into the main model, and a retry running beside it.
 				stopAgent(id);
-				finish({ status: "error", error: `${role} did not finish within ${SPAWN_TIMEOUT_MS / 60000} minutes` });
-			}, SPAWN_TIMEOUT_MS);
+				finish({ status: "error", error: `${role} did not finish within ${Math.round(timeoutMs / 60000)} minutes` });
+			}, timeoutMs);
 			pending.add(abort);
 		});
 		// we report the result ourselves; stop pi-subagents notifying about it as well (must be
@@ -269,21 +269,33 @@ export default function (pi: ExtensionAPI): void {
 			.join(" · ");
 	}
 
-	function writeReport(ctx: ExtensionContext, task: string, phases: Phase[], verdict: string): string | undefined {
+	/** "(1m12s · 38k tok)" for a heading, from the fields pi-subagents puts on every outcome. */
+	function phaseCost(o: AgentOutcome): string {
+		const bits = [
+			o.durationMs ? (o.durationMs >= 60_000 ? `${Math.floor(o.durationMs / 60_000)}m${String(Math.round((o.durationMs % 60_000) / 1000)).padStart(2, "0")}s` : `${Math.round(o.durationMs / 1000)}s`) : "",
+			o.tokens?.total ? `${o.tokens.total >= 1000 ? `${(o.tokens.total / 1000).toFixed(o.tokens.total >= 10_000 ? 0 : 1)}k` : o.tokens.total} tok` : "",
+		].filter(Boolean);
+		return bits.length ? ` (${bits.join(" · ")})` : "";
+	}
+
+	/** Returns the path written, or the reason it was not -- a silent undefined hid failures from the final notify. */
+	function writeReport(ctx: ExtensionContext, task: string, phases: Phase[], verdict: string): { file?: string; error?: string } {
 		try {
 			const dir = join(ctx.cwd, ".pi", "rounds");
 			mkdirSync(dir, { recursive: true });
+			// second-granular stamps collide (two rounds a second apart used to overwrite); the suffix
+			// and the exclusive flag make a collision a visible error rather than a lost report
 			const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-			const file = join(dir, `${stamp}.md`);
+			const file = join(dir, `${stamp}-${Math.random().toString(36).slice(2, 6)}.md`);
 			const body = [
 				`# ${task}`,
 				`\n_${new Date().toISOString()} — ${verdict}_\n`,
-				...phases.map((p) => `\n## ${p.title}\n\n${text(p.outcome)}\n`),
+				...phases.map((p) => `\n## ${p.title}${phaseCost(p.outcome)}\n\n${text(p.outcome)}\n`),
 			].join("\n");
-			writeFileSync(file, body);
-			return file;
-		} catch {
-			return undefined;
+			writeFileSync(file, body, { flag: "wx" });
+			return { file };
+		} catch (e) {
+			return { error: e instanceof Error ? e.message : String(e) };
 		}
 	}
 
@@ -327,6 +339,7 @@ export default function (pi: ExtensionAPI): void {
 		const cfg = readConfig(ctx.cwd);
 		const configured = cfg.panel?.length ? cfg.panel : DEFAULTS.panel;
 		const panel = configured.slice(0, Math.max(1, Math.min(configured.length, seats)));
+		const timeoutMs = Math.max(1, cfg.timeoutMinutes ?? DEFAULTS.timeoutMinutes) * 60_000;
 		const announce = (phase: string) => {
 			if (dead) return; // ctx throws now; the slot emit below is dead-checked on its own
 			if (running) running.phase = phase;
@@ -345,6 +358,7 @@ export default function (pi: ExtensionAPI): void {
 						`dev${suffix}: ${task.slice(0, 40)}`,
 						carry ? `${task}\n\nA previous round's critic confirmed these findings; address them:\n${carry}` : task,
 						cfg.dev,
+						timeoutMs,
 					);
 					phases.push({ role: "dev", title: `Dev${suffix}`, outcome: dev });
 					if (dead) return;
@@ -358,14 +372,14 @@ export default function (pi: ExtensionAPI): void {
 					`${carry ? `\nWhat the implementer reported:\n${carry}\n` : ""}\nRead the diff yourself and judge the code, not the description.`;
 				const seatName = (n: number) => `review${suffix}${panel.length > 1 ? ` ${String.fromCharCode(65 + n)}` : ""}`;
 				let seated = await Promise.all(
-					panel.map((seat, n) => runPhase("reviewer", seatName(n), brief, seat.model).then((outcome) => ({ seat, n, outcome }))),
+					panel.map((seat, n) => runPhase("reviewer", seatName(n), brief, seat.model, timeoutMs).then((outcome) => ({ seat, n, outcome }))),
 				);
 				// One retry per seat. These endpoints drop a turn now and then, and a seat that says
 				// nothing costs the panel a whole viewpoint for a failure that usually does not repeat.
 				if (dead) return;
 				seated = await Promise.all(
 					seated.map(async (s) =>
-						failed(s.outcome) && !cancelled && !dead ? { ...s, outcome: await runPhase("reviewer", `${seatName(s.n)} retry`, brief, s.seat.model) } : s,
+						failed(s.outcome) && !cancelled && !dead ? { ...s, outcome: await runPhase("reviewer", `${seatName(s.n)} retry`, brief, s.seat.model, timeoutMs) } : s,
 					),
 				);
 				if (dead) return;
@@ -384,6 +398,7 @@ export default function (pi: ExtensionAPI): void {
 						`${usable.length > 1 ? `${usable.length} reviewers looked at this change independently. Merge findings that are the same defect, and judge each distinct finding once.\n\n` : ""}` +
 						`The reviews to verify:\n${merged}`,
 					cfg.critic,
+					timeoutMs,
 				);
 				phases.push({ role: "critic", title: `Critique${suffix}`, outcome: critique });
 				if (dead) return;
@@ -396,7 +411,8 @@ export default function (pi: ExtensionAPI): void {
 			if (dead) return; // writeReport reads ctx.cwd, which throws on a replaced activation
 			const critique = [...phases].reverse().find((p) => p.role === "critic" && !failed(p.outcome));
 			const verdict = cancelled ? `stopped after ${phases.length} phase${phases.length === 1 ? "" : "s"}` : verdictLine(critique ? text(critique.outcome) : undefined);
-			const file = writeReport(ctx, task, phases, verdict);
+			const report = writeReport(ctx, task, phases, verdict);
+			const file = report.file;
 			lastSummary = verdict;
 			// What goes into the session is what the main model can act on: the critique in full, the
 			// other phases trimmed. The whole thing is on disk, and a round that pastes three agent
@@ -417,8 +433,9 @@ export default function (pi: ExtensionAPI): void {
 			);
 			const broken = cancelled ? 0 : phases.filter((p) => failed(p.outcome)).length; // a stopped phase is not a broken one
 			ctx.ui.notify(
-				`Round ${cancelled ? "stopped" : "finished"} — ${verdict}${broken ? ` · ${broken} phase${broken === 1 ? "" : "s"} failed` : ""}${file ? ` · ${file}` : ""}`,
-				broken || cancelled ? "warning" : "info",
+				`Round ${cancelled ? "stopped" : "finished"} — ${verdict}${broken ? ` · ${broken} phase${broken === 1 ? "" : "s"} failed` : ""}` +
+					(file ? ` · ${file}` : report.error ? ` · report not written: ${report.error}` : ""),
+				broken || cancelled || report.error ? "warning" : "info",
 			);
 		} finally {
 			running = undefined;
@@ -503,8 +520,9 @@ export default function (pi: ExtensionAPI): void {
 				return { file: f, label: `${f.slice(0, 16).replace("T", " ")}  ${verdict ? `${verdict} · ` : ""}${task}` };
 			});
 			// ui.select takes plain strings and gives one back, so map the label to its file
-			const picked = await ctx.ui.select("Rounds in this repository", entries.map((e) => e.label));
-			const chosen = entries.find((e) => e.label === picked);
+			const labels = entries.map((e) => e.label);
+			const picked = await ctx.ui.select("Rounds in this repository", labels);
+			const chosen = entries[labels.indexOf(picked)]; // by position: two rounds with one task and verdict share a label
 			if (!chosen) return;
 			const body = readFileSync(join(dir, chosen.file), "utf8");
 			pi.sendMessage(

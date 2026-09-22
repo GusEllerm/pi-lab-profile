@@ -24,7 +24,10 @@ const globalRoot = (() => {
 const piTui = globalRoot && join(globalRoot, "@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui");
 const piCc = join(homedir(), ".pi/agent/npm/node_modules/pi-cc-extensions");
 
-test("pi-tui Text still caches exactly one width", { skip: !piTui || !existsSync(piTui) }, async () => {
+const noPi = !piTui || !existsSync(piTui) ? "pi-coding-agent is not installed globally" : false;
+const noCc = !existsSync(piCc) ? "pi-cc-extensions is not installed under ~/.pi/agent/npm" : false;
+
+test("pi-tui Text still caches exactly one width", { skip: noPi }, async () => {
 	const { Text } = await import(join(piTui, "dist/index.js"));
 	const probe = new Text("some text long enough to wrap at a narrow width");
 	const wide = probe.render(40);
@@ -37,7 +40,7 @@ test("pi-tui Text still caches exactly one width", { skip: !piTui || !existsSync
 	);
 });
 
-test("pi-tui hstack measures children it then stretches", { skip: !piTui || !existsSync(piTui) }, () => {
+test("pi-tui hstack measures children it then stretches", { skip: noPi }, () => {
 	const layout = readFileSync(join(piTui, "dist/layout.js"), "utf8");
 	assert.match(
 		layout,
@@ -46,7 +49,7 @@ test("pi-tui hstack measures children it then stretches", { skip: !piTui || !exi
 	);
 });
 
-test("pi-cc hover still hit-tests at the terminal width", { skip: !existsSync(piCc) }, () => {
+test("pi-cc hover still hit-tests at the terminal width", { skip: noCc }, () => {
 	const src = readFileSync(join(piCc, "extensions/renderer/mouse/interaction.ts"), "utf8");
 	assert.match(
 		src,

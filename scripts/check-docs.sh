@@ -10,6 +10,11 @@
 #   bash scripts/check-docs.sh --fix    rewrite the recorded hashes to match the current code
 set -uo pipefail
 cd "$(dirname "$0")/.."
+if [ ! -d pi-lab-profile-vault ]; then
+	# an npm-packed install ships scripts/ without the vault; that is not a stale vault, it is no vault
+	echo "no vault here (pi-lab-profile-vault/ is absent), nothing to check"
+	exit 0
+fi
 
 fix=0
 [ "${1:-}" = "--fix" ] && fix=1
@@ -17,8 +22,9 @@ stale=0
 checked=0
 
 while IFS= read -r note; do
-	source_path=$(sed -n 's/^source: *//p' "$note" | head -1)
-	recorded=$(sed -n 's/^source-hash: *//p' "$note" | head -1)
+	# frontmatter only: the first --- ... --- block, so a "source:" in the body is not mistaken for it
+	source_path=$(awk 'NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} NR>1&&sub(/^source: */,""){print; exit}' "$note")
+	recorded=$(awk 'NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} NR>1&&sub(/^source-hash: */,""){print; exit}' "$note")
 	[ -n "$source_path" ] || continue
 	checked=$((checked + 1))
 	if [ ! -f "$source_path" ]; then
@@ -30,8 +36,14 @@ while IFS= read -r note; do
 	if [ "$current" = "$recorded" ]; then
 		echo "ok      ${note#./}"
 	elif [ "$fix" = "1" ]; then
-		# BSD and GNU sed disagree about -i, so write through a temp file
-		sed "s/^source-hash: .*/source-hash: $current/" "$note" > "$note.tmp" && mv "$note.tmp" "$note"
+		# BSD and GNU sed disagree about -i, so write through a temp file. A note that has a source
+		# but no hash yet gets the line inserted after its source: line -- rewriting a line that is
+		# not there used to print "updated" and change nothing.
+		if [ -n "$recorded" ]; then
+			sed "s/^source-hash: .*/source-hash: $current/" "$note" > "$note.tmp" && mv "$note.tmp" "$note"
+		else
+			awk -v h="$current" 'BEGIN{done=0} {print} !done && /^source: /{print "source-hash: " h; done=1}' "$note" > "$note.tmp" && mv "$note.tmp" "$note"
+		fi
 		echo "updated ${note#./} -> $current"
 	else
 		echo "STALE   ${note#./}"
@@ -44,4 +56,5 @@ done < <(find pi-lab-profile-vault -name "*.md" | sort)
 
 echo
 echo "$checked notes checked, $stale stale"
-[ "$stale" -eq 0 ] || [ "$fix" = "1" ]
+# --fix repairs hashes; it cannot repair a note whose source is gone, so that still fails
+[ "$stale" -eq 0 ]

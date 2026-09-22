@@ -1,5 +1,5 @@
-// Acceptance tests for ~/.pi/agent/extensions/image-window.ts
-// Run: node --test ~/.pi/agent/tests/image-window.test.ts   (Node ≥ 22.18 strips the types itself)
+// Acceptance tests for extensions/image-window.ts
+// Run: npm test   (Node ≥ 22.18 strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import imageWindow, { countImages, parseWindow, placeholder, trimImages } from "../extensions/image-window.ts";

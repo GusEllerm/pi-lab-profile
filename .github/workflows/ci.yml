@@ -4,9 +4,12 @@ on:
   push:
   pull_request:
   schedule:
-    # These extensions touch two Pi internals on purpose. A weekly run says which Pi release
-    # broke them before someone finds out mid-session.
+    # Three workarounds here depend on upstream bugs staying exactly as they are. The canaries in
+    # tests/upstream-assumptions.test.mjs assert each bug is still present; the weekly job below
+    # installs the current Pi and pi-cc and runs them, so an upstream fix shows up as a failing
+    # canary here rather than as a mystery mid-session.
     - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 jobs:
   parse:
@@ -35,3 +38,32 @@ jobs:
       - name: Config templates are valid JSON
         run: |
           for f in profiles/*/*.json; do node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" && echo "ok  $f"; done
+
+  canaries:
+    # Only on the schedule (and by hand): it installs Pi, which the push job has no need of.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the current Pi and pi-cc where the canaries look for them
+        run: |
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@latest
+          mkdir -p ~/.pi/agent/npm && cd ~/.pi/agent/npm && npm init -y >/dev/null && npm install --ignore-scripts pi-cc-extensions@latest
+          node -e "console.log('pi', require(require('child_process').execSync('npm root -g').toString().trim() + '/@earendil-works/pi-coding-agent/package.json').version)"
+          node -e "console.log('pi-cc', require(process.env.HOME + '/.pi/agent/npm/node_modules/pi-cc-extensions/package.json').version)"
+
+      - name: Canaries must run, not skip, and must still find every upstream bug
+        run: |
+          node --test tests/upstream-assumptions.test.mjs 2>&1 | tee canaries.tap
+          if grep -q "# SKIP" canaries.tap; then
+            echo "::error::a canary skipped — the install step did not put Pi or pi-cc where tests/upstream-assumptions.test.mjs looks"
+            exit 1
+          fi
+          if grep -q "^not ok" canaries.tap; then
+            echo "::error::an upstream bug this profile works around has been fixed — delete the matching workaround (see docs/upstream-hover-width.md)"
+            exit 1
+          fi

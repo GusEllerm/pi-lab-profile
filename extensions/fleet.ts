@@ -45,7 +45,6 @@ type Tracked = {
 	startedAt: number;
 	endedAt?: number;
 	durationMs?: number;
-	outputTokens?: number;
 	samples: { t: number; out: number }[];
 };
 
@@ -191,31 +190,6 @@ function attachedRows(session: any, width: number, theme: Theme): string[] {
 	return rows;
 }
 
-/** The agent's transcript, newest last, as plain rows. */
-function transcript(session: any, width: number, theme: Theme): string[] {
-	const entries = session?.sessionManager?.getBranch?.() ?? [];
-	const rows: string[] = [];
-	for (const e of entries) {
-		const m = (e as { type?: string; message?: any }).message;
-		if (e.type !== "message" || !m) continue;
-		const text = Array.isArray(m.content)
-			? m.content
-					.map((c: any) => (c.type === "text" ? c.text : c.type === "toolCall" ? `→ ${c.name}(${oneLine(JSON.stringify(c.arguments ?? {}), 60)})` : ""))
-					.filter(Boolean)
-					.join("\n")
-			: typeof m.content === "string"
-				? m.content
-				: "";
-		if (!text.trim()) continue;
-		const label =
-			m.role === "assistant" ? theme.fg("accent", "agent ") : m.role === "user" ? theme.fg("muted", "task  ") : theme.fg("dim", "tool  ");
-		for (const [i, lineText] of text.split("\n").entries()) {
-			for (const piece of wrap(lineText, width - 8)) rows.push((i === 0 && piece === wrap(lineText, width - 8)[0] ? label : "      ") + piece);
-		}
-		rows.push("");
-	}
-	return rows;
-}
 
 function wrap(text: string, width: number): string[] {
 	if (width < 10) return [text];
@@ -326,7 +300,6 @@ export default function (pi: ExtensionAPI): void {
 		emit("statusbar:attached", {});
 		rerender();
 	}
-	const forget = (id: string) => liveCache.delete(id);
 	const roster = () =>
 		[...agents.values()]
 			.filter((a) => !a.endedAt || Date.now() - a.endedAt < FINISHED_LINGER_MS)
@@ -347,7 +320,6 @@ export default function (pi: ExtensionAPI): void {
 			startedAt: status === "running" && prev?.status !== "running" ? Date.now() : (prev?.startedAt ?? Date.now()),
 			endedAt: ended ? Date.now() : undefined,
 			durationMs: d.durationMs,
-			outputTokens: d.tokens?.output,
 			samples: prev?.samples ?? [],
 		});
 		ensureTicker();
@@ -374,6 +346,12 @@ export default function (pi: ExtensionAPI): void {
 				}
 				publishSlot();
 				rerender();
+				// Only render() re-checks the roster, and a session without UI never renders: without
+				// this the ticker kept emitting a slot every 500ms after the last agent aged out.
+				if (!roster().length) {
+					clearInterval(ticker);
+					ticker = undefined;
+				}
 			}, TICK_MS);
 		if (!active && ticker) {
 			clearInterval(ticker);

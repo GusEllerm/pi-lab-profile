@@ -6,9 +6,20 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "extensions", "outputs.ts"), "utf8");
-// take the function body and strip the TS annotations so plain node can run it
-const body = src.slice(src.indexOf("function paintDiff"), src.indexOf("class Pager"))
-  .replace("function paintDiff(line: string, t: Theme): string", "function paintDiff(line, t)");
+// take the function body and strip the TS annotations so plain node can run it. Both markers and
+// the signature are asserted: a moved marker or a changed signature used to surface as a bare
+// SyntaxError from new Function, with no mention of what had moved.
+const slice = (start, end) => {
+  const a = src.indexOf(start);
+  const b = src.indexOf(end, a + 1);
+  assert.ok(a !== -1, `marker not found in outputs.ts: ${start}`);
+  assert.ok(b !== -1, `marker not found in outputs.ts after ${start}: ${end}`);
+  return src.slice(a, b);
+};
+const signature = "function paintDiff(line: string, t: Theme): string";
+const sliced = slice("function paintDiff", "class Pager");
+assert.ok(sliced.includes(signature), `paintDiff's signature changed; update this test's strip (looked for: ${signature})`);
+const body = sliced.replace(signature, "function paintDiff(line, t)");
 const paintDiff = new Function(`${body}; return paintDiff;`)();
 const theme = { fg: (colour, text) => `<${colour}>${text}` };
 const cases = [

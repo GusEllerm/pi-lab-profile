@@ -2,6 +2,5 @@ node_modules/
 .pi/
 *.log
 
-# Obsidian per-machine UI state; the notes themselves are versioned
-pi-lab-profile-vault/.obsidian/workspace.json
-pi-lab-profile-vault/.obsidian/graph.json
+# Obsidian's own state is per machine; the notes are what is versioned
+pi-lab-profile-vault/.obsidian/

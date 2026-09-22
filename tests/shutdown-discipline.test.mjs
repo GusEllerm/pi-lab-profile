@@ -41,7 +41,7 @@ test("rounds: the reply listener is subscribed before its timer is armed", () =>
 
 test("rounds: a phase that times out stops its agent rather than forgetting it", () => {
 	const wait = between(read("rounds.ts"), "const outcome = await new Promise<AgentOutcome>", "emit(\"subagents:rpc:consume\"");
-	const timeout = between(wait, "timer = setTimeout(() => {", "}, SPAWN_TIMEOUT_MS);");
+	const timeout = between(wait, "timer = setTimeout(() => {", "}, timeoutMs);");
 	assert.match(timeout, /stopAgent\(id\);/, "the timeout branch must call stopAgent, not just the unsubscriber");
 });
 
