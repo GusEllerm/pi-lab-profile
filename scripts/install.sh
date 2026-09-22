@@ -29,9 +29,10 @@ case "$profile" in
 		copy "$here/profiles/lab/rounds.json" "$agent_dir/rounds.json"
 		copy "$here/profiles/lab/subagents.json" "$agent_dir/subagents.json"
 		copy "$here/profiles/lab/models.json" "$agent_dir/models.json"
+		copy "$here/profiles/lab/mcp.json" "$agent_dir/mcp.json"
 		mkdir -p "$HOME/.local/bin"
 		for f in "$here"/profiles/lab/bin/*; do copy "$f" "$HOME/.local/bin/$(basename "$f")"; chmod +x "$HOME/.local/bin/$(basename "$f")" 2>/dev/null || true; done
-		echo "  → needs: an 'ssh globus1' host alias, and 'uvx alcf-ai auth login' once"
+		echo "  → needs: an 'ssh globus1' host alias, 'uvx alcf-ai auth login' once, and uv on PATH for the hpc-bridge MCP server"
 		;;
 	example)
 		echo "Example profile"

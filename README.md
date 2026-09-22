@@ -38,6 +38,7 @@ regular mode draws into the terminal's own scrollback and has no layout root to 
 | `/open` | everything substantial from the session — reasoning, bash runs, diffs, writes — in full, in a picker; hand off to `$EDITOR` |
 | `/pin` | the pinned copy of your last message above the transcript, on/off |
 | `/images` | keep only the newest N images in context |
+| `/mcp` | MCP servers started for this session and their tools — Pi has no MCP of its own; this profile adds it |
 
 ### The review panel
 
@@ -77,12 +78,27 @@ code) on one lab's gateway, as a shape to expect rather than a ranking to copy:
 
 Run your own before trusting any model in the critic seat.
 
+### MCP servers as tools
+
+`extensions/mcp.ts` starts every server named in `~/.pi/agent/mcp.json` or a project `.pi/mcp.json`
+over stdio, registers its tools with Pi under `<server>_<tool>` using the server's own schemas, and
+turns any resource you name into a skill. The lab config ships
+[hpc-bridge](https://github.com/globus-labs/hpc-bridge) — drive a supercomputer from the session:
+find a facility, log in to Globus once, start a billed block, run commands on it, release it. It
+needs `uv` on `PATH`; the Globus Labs cluster is in its public registry as a multi-user endpoint, so
+it attaches with no SSH.
+
+```json
+{ "servers": { "hpc": { "command": "uvx", "args": ["--from", "git+https://github.com/globus-labs/hpc-bridge", "hpc-bridge"],
+                        "skills": [{ "uri": "hpcbridge://guidance/operations", "name": "driving-hpc" }] } } }
+```
+
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · outputs · code-panels · image-window
+extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
-profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), bin helpers
+profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), mcp.json (hpc-bridge), bin helpers
 profiles/example/  a rounds.json template
 scripts/        install.sh (roles + profile) · check.sh (parse + boot guard)
 docs/           full setup guide, including the endpoint and tunnel work

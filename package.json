@@ -1,7 +1,7 @@
 {
   "name": "pi-lab-profile",
   "version": "0.1.0",
-  "description": "A Pi profile: right-hand status column, an interactive subagent fleet you can attach to, and dev → review → critique rounds across separate inference endpoints.",
+  "description": "A Pi profile: right-hand status column, an interactive subagent fleet you can attach to, dev \u2192 review \u2192 critique rounds across separate inference endpoints, and MCP servers as Pi tools.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -24,16 +24,21 @@
       "./extensions/endpoints.ts",
       "./extensions/code-panels.ts",
       "./extensions/image-window.ts",
-      "./extensions/outputs.ts"
+      "./extensions/outputs.ts",
+      "./extensions/mcp.ts"
     ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.86.0",
     "@earendil-works/pi-coding-agent": ">=0.86.0",
-    "@earendil-works/pi-tui": ">=0.86.0"
+    "@earendil-works/pi-tui": ">=0.86.0",
+    "typebox": "*"
   },
   "scripts": {
     "check": "bash scripts/check.sh",
     "test": "node --test tests/*.test.ts tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }
