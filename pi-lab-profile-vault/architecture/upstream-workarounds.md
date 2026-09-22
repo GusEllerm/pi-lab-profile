@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 11240382bb2cb618e908461954972026f0be86c6
+source-hash: f180073dacfb687bf3edf3a420127151f1c3ac5f
 documented: 2026-09-20
 ---
 

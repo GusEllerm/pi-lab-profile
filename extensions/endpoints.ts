@@ -23,7 +23,7 @@ const ALCF_HOST = "inference-api.alcf.anl.gov";
 const ALCF_TOKEN_ERROR = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "alcf-token", "last-error");
 const PROBE_TIMEOUT_MS = 8000;
 
-type AnyModel = { id: string; provider: string; baseUrl: string; name?: string };
+type AnyModel = { id: string; provider: string; baseUrl: string };
 type Row = { label: string; model?: AnyModel; note?: string };
 
 function customProviderIds(): string[] {
@@ -56,16 +56,30 @@ function setEndpointStatus(ctx: ExtensionContext, model: AnyModel | undefined): 
 }
 
 // One list-endpoints fetch serves every ALCF provider in a single /endpoints run.
-let listEndpointsMemo: { at: number; value: Promise<unknown> } | undefined;
+let listEndpointsMemo: { at: number; gateway: string; value: Promise<unknown> } | undefined;
 function listEndpoints(gateway: string, headers: Record<string, string>): Promise<unknown> {
-	if (!listEndpointsMemo || Date.now() - listEndpointsMemo.at > 5000) {
-		listEndpointsMemo = { at: Date.now(), value: getJson(`${gateway}list-endpoints`, headers) };
+	if (!listEndpointsMemo || listEndpointsMemo.gateway !== gateway || Date.now() - listEndpointsMemo.at > 5000) {
+		const value = getJson(`${gateway}list-endpoints`, headers).catch((e) => {
+			listEndpointsMemo = undefined; // a failure is not worth remembering for five seconds
+			throw e;
+		});
+		listEndpointsMemo = { at: Date.now(), gateway, value };
 	}
 	return listEndpointsMemo.value;
 }
 
 async function getJson(url: string, headers: Record<string, string> = {}): Promise<unknown> {
-	const res = await fetch(url, { headers, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+	let res: Response;
+	try {
+		res = await fetch(url, { headers, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+	} catch (e) {
+		// undici reports "fetch failed" and puts the real reason (ECONNREFUSED, ENOTFOUND, a cert
+		// error) on `cause`; a timeout arrives as a bare abort. Neither helps anyone as printed.
+		const err = e as { name?: string; message?: string; cause?: { code?: string; message?: string } };
+		if (err?.name === "TimeoutError" || err?.name === "AbortError") throw new Error(`no answer in ${PROBE_TIMEOUT_MS / 1000}s`);
+		const cause = err?.cause?.code ?? err?.cause?.message;
+		throw new Error(cause ? `${err?.message ?? "fetch failed"} (${cause})` : (err?.message ?? String(e)));
+	}
 	if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
 	return res.json();
 }
@@ -97,9 +111,14 @@ const NON_CHAT = /embed|genslm|sam3|dinov3|amsc-/i;
  * {"clusters":{"sophia":{"frameworks":{"vllm":{"models":[...]}}}}}.
  */
 function alcfOffered(payload: unknown, cluster: string, framework: string): string[] {
-	const fw = (payload as { clusters?: Record<string, { frameworks?: Record<string, { models?: string[] }> }> })
-		?.clusters?.[cluster]?.frameworks?.[framework];
-	return (fw?.models ?? []).filter((id) => !NON_CHAT.test(id)).sort();
+	const frameworks =
+		(payload as { clusters?: Record<string, { frameworks?: Record<string, { models?: string[] }> }> })?.clusters?.[cluster]
+			?.frameworks ?? {};
+	// The path segment after the cluster is a framework name only sometimes (sophia/vllm/v1) and a
+	// plain "api" otherwise (minerva/api/v1, metis/api/v1) -- so when it names nothing the gateway
+	// lists, take every framework the cluster offers rather than none of them.
+	const pool = frameworks[framework]?.models ?? Object.values(frameworks).flatMap((fw) => fw?.models ?? []);
+	return [...new Set(pool)].filter((id) => !NON_CHAT.test(id)).sort();
 }
 
 /**
@@ -132,14 +151,18 @@ async function probeGlobus(models: AnyModel[]): Promise<Row[]> {
 		return rows;
 	} catch (e) {
 		const why = String((e as Error).message ?? e);
-		const hint = /fetch failed|ECONNREFUSED/i.test(why) ? "tunnel down — run: globus-tunnel ensure" : why;
+		const hint = /fetch failed|ECONNREFUSED|ENOTFOUND|no answer in/i.test(why) ? `tunnel down — run: globus-tunnel ensure (${why})` : why;
 		return models.map((m) => ({ model: m, label: `? down    ${m.id}  (${hint})` }));
 	}
 }
 
 async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyModel[]): Promise<Row[]> {
 	const base = models[0].baseUrl;
-	const gateway = base.slice(0, base.indexOf("/resource_server/") + "/resource_server/".length);
+	const marker = base.indexOf("/resource_server/");
+	// Without the marker the slice below would take the first sixteen characters of the URL as the
+	// gateway and probe nonsense; say what happened instead.
+	if (marker < 0) return models.map((m) => ({ model: m, label: `? unknown ${m.id}  (unrecognised ALCF URL: no /resource_server/ in ${base})` }));
+	const gateway = base.slice(0, marker + "/resource_server/".length);
 	const [cluster, framework] = base.slice(gateway.length).split("/");
 	let token: string | undefined;
 	try {

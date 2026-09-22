@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 4cd5b73deb2a99d22d21a726fbfbf3ee4ab3e8c2
+source-hash: 8451cdeba5a35e5a09fb1b9ffba3ba0aba36b750
 documented: 2026-09-20
 ---
 
@@ -114,6 +114,25 @@ that comes from `jobs`. Only Sophia (`…/sophia/vllm/v1`) matches a real framew
 `Map<string, Row>` keyed by **the exact rendered option text**, including the `◀ active` suffix.
 Section headers and `baseUrl` lines are pushed into the options but never registered in the map, so
 selecting one is a silent no-op.
+
+### 22 Sept 2026 review fixes
+
+- The ALCF framework was read positionally from the URL (`…/<cluster>/<framework>/v1`), which is a
+  real framework name for Sophia (`vllm`) and the literal `api` for Minerva and Metis — so
+  `alcfOffered` found nothing for two of the three clusters and a failed `jobs` call degraded to
+  `? unknown` instead of `? listed`. When the segment names no framework the gateway lists, every
+  framework the cluster offers is pooled (M11).
+- `getJson` keeps undici's real reason from `error.cause` (`ECONNREFUSED`, `ENOTFOUND`, a cert
+  error) and reports a timeout as `no answer in 8s`; the tunnel hint matches those too (M12).
+- `listEndpointsMemo` no longer caches a rejected promise for five seconds, and is keyed by
+  gateway. A base URL without `/resource_server/` now yields an explicit `? unknown … (unrecognised
+  ALCF URL)` row instead of probing the first sixteen characters of the URL as a gateway.
+
+**Corrections to the gotchas above.** `keys()`'s try/catch covers one `emit`, not the post-probe
+code: everything after the ~8 s `await` in the `/endpoints` handler touches `ctx` unguarded, and is
+survivable only because the host catches a throw inside a *slash-command handler*. A new async path
+outside a command handler would not be. And a URL that lost `/resource_server/` never routed to
+`probeGlobus` — only a host change does that; it now gets the explicit unknown row.
 
 ## Invariants a future change must not break
 
