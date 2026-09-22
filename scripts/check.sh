@@ -31,10 +31,17 @@ if [ "$parse_only" = 1 ]; then exit $fail; fi
 command -v pi >/dev/null || { echo "boot: skipped (pi not on PATH)"; exit $fail; }
 log=$(mktemp)
 ALCF_TOKEN_OFFLINE=1 ALCF_TOKEN_TTL=604800 perl -e 'alarm 45; exec @ARGV' pi --no-session --thinking off -p "Reply with just: ok" </dev/null >"$log" 2>&1
-if grep -qiE "Failed to load extension|is not defined|is not a function|ParseError|stale after session" "$log"; then
+status=$?
+# Both halves are required. The first version only looked for known failure strings, so a pi that
+# died on startup -- or was killed by the alarm above -- printed "boot: clean" and was believed.
+if [ "$status" -ne 0 ]; then
+	echo "BOOT FAIL: pi exited $status$([ "$status" -eq 142 ] && echo ' (killed by the 45s alarm)')"; tail -5 "$log"; fail=1
+elif ! grep -qi '^ok' "$log"; then
+	echo "BOOT FAIL: no reply from the model"; tail -5 "$log"; fail=1
+elif grep -qiE "Failed to load extension|is not defined|is not a function|ParseError|stale after session" "$log"; then
 	echo "BOOT ERRORS:"; grep -iE "Failed to load|is not defined|is not a function|ParseError|stale after session" "$log" | head -5; fail=1
 else
-	echo "boot: clean"
+	echo "boot: clean (pi replied)"
 fi
 rm -f "$log"
 exit $fail

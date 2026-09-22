@@ -728,13 +728,25 @@ export default function (pi: ExtensionAPI): void {
 			else if (matchesKey(data, "enter")) attach(ctx, list[index]);
 						else if (data === "s") {
 				const agent = list[index];
-				void ctx.ui.input(`Steer "${oneLine(agent.description || agent.type, 40)}"`, "message for the agent").then(async (text) => {
-					const session = live(agent.id)?.session;
-					if (!text) return;
-					if (typeof session?.steer !== "function") return ctx.ui.notify("That agent is no longer running.", "warning");
-					await session.steer(text);
-					ctx.ui.notify("Steering message delivered.", "info");
-				});
+				// pi has no unhandledRejection handler, so a promise nobody catches is a process exit
+				void ctx.ui
+					.input(`Steer "${oneLine(agent.description || agent.type, 40)}"`, "message for the agent")
+					.then(async (text) => {
+						const session = live(agent.id)?.session;
+						if (!text) return;
+						if (typeof session?.steer !== "function") return ctx.ui.notify("That agent is no longer running.", "warning");
+						await session.steer(text);
+						if (dead) return; // the activation can go while steer() is in flight
+						ctx.ui.notify("Steering message delivered.", "info");
+					})
+					.catch((error) => {
+						if (dead) return;
+						try {
+							ctx.ui.notify(`Could not steer: ${error instanceof Error ? error.message : String(error)}`, "error");
+						} catch {
+							// stale between the rejection and here
+						}
+					});
 			} else if (data === "m") pi.sendUserMessage(`/agent-model ${list[index].id}`, { expandPromptTemplates: true });
 			else return undefined;
 			rerender();

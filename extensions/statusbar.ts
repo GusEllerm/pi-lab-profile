@@ -832,9 +832,11 @@ export default function (pi: ExtensionAPI): void {
 	 * what leaves artefacts on screen until the next keystroke.
 	 */
 	function scheduleResizeSettle(): void {
+		if (dead) return;
 		if (resizeTimer) clearTimeout(resizeTimer);
 		resizeTimer = setTimeout(() => {
 			resizeTimer = undefined;
+			if (dead) return; // the 120ms window can straddle a reload
 			prof.settles++;
 			const tui = tuiRef;
 			if (!tui) return;
@@ -1168,6 +1170,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function mountSidebar(tui: TUI): void {
+		if (dead) return; // reached from setTimeout(0) sites: a timer straddling a reload would re-mount the dead column and take hook.onRoot from the live one
 		if (!isViewportTUI(tui)) return;
 		instrumentFrames(tui);
 		guardHover(tui);
@@ -1386,6 +1389,10 @@ export default function (pi: ExtensionAPI): void {
 		dead = true;
 		gcObserver?.disconnect(); // a live observer would outlive this activation and leak per reload
 		gcObserver = undefined;
+		// Added per activation, so it must go per activation: left in place, every reload stacked
+		// another listener whose closure pinned the whole dead activation, and one resize then ran a
+		// forced full repaint per reload ever done.
+		process.stdout.off("resize", scheduleResizeSettle);
 		if (resizeTimer) {
 			clearTimeout(resizeTimer);
 			resizeTimer = undefined;

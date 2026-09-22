@@ -1,6 +1,6 @@
 ---
 source: extensions/rounds.ts
-source-hash: eb8daacf7f6ade9db2b1d4946e41a931fe247dd5
+source-hash: 0bbf8704794dd416db2a69f41bece8eebfcea765
 documented: 2026-09-20
 ---
 
@@ -160,6 +160,18 @@ to save. `writeReport` swallows its own failure and returns `undefined`; the rou
 **Argument parsing — `parse`.** Loops `^--(rounds|reviewers)[\s=]+(\d+)` off the front, so flags may
 repeat and come in any order, each clamped to 1–5. Everything after them is the task. The default
 seat count is the *configured* panel length, not `DEFAULTS`.
+
+### Surviving a `/reload` (fixed 22 Sept 2026)
+
+A round runs for minutes after `/round` returned, so the host's catch around command handlers does
+not cover it. Three things make a reload safe now: every wait in `runPhase` registers a settle
+function in a module-level `pending` set, and `session_shutdown` settles them all with `RELOADED`
+instead of leaving a 20-minute timer to fire into a dead activation; `runPhase`, `announce` and every
+post-`await` point in `round()` check `dead` before touching `ctx`; and both command sites go through
+`launch()`, whose `.catch` is the only one the promise has. Also fixed in the same block: the reply
+listener is subscribed *before* its timer is armed (a throw from `pi.events.on` used to leave a timer
+reaching for an unassigned unsubscriber), and a phase that times out now calls `stopAgent` rather
+than merely forgetting an agent that is still running.
 
 ## Invariants a future change must not break
 

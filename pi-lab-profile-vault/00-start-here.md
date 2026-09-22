@@ -69,9 +69,13 @@ here should be deleted rather than repaired.
 These are not style preferences. Each one is a bug that already happened, twice in some cases.
 
 1. **Anything that can run after `session_shutdown` must not touch the captured `pi` or `ctx`.**
-   `/reload` replaces the activation; every getter on the old context then throws, and a throw from a
-   timer or a promise continuation is an uncaughtException that kills the session. Timers must be
-   cleared on shutdown; handlers must check a `dead` flag first. This killed sessions twice.
+   `/reload` replaces the activation; every getter on the old context then throws. A throw inside a
+   *slash-command handler* is caught by the host — but a throw from a timer, a process or event
+   callback, a render, or a promise nobody awaits is not, and pi has **no `unhandledRejection`
+   handler**, so it exits the process. Timers must be cleared on shutdown, pending waits settled,
+   process listeners removed, fire-and-forget promises given a `.catch`, and every continuation
+   must check `dead` first. This killed sessions twice, and the 22 Sept review found four more
+   instances — `tests/shutdown-discipline.test.mjs` now pins the guards.
 
 2. **A wrapper installed on an object that outlives the activation must be installed once, ever.**
    The TUI, the transcript document and `Text.prototype` all survive `/reload`. Versioning a wrapper

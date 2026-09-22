@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: d1270e600beb45f094174cb1223c101370e3edde
+source-hash: 116ed9b365050b014e42d1b41628a8e6dd8b5c6e
 documented: 2026-09-20
 ---
 
@@ -267,6 +267,14 @@ re-assigning the same object. Wrapping a wrapper then becomes impossible rather 
 `prof.hoverWrappers` must never exceed 1 — `/prof` prints it — and
 `tests/hover-guard.test.mjs` asserts the structure in the source, because the failure only shows up
 after thousands of frames and this invariant has now been broken twice.
+
+### The resize listener (fixed 22 Sept 2026)
+
+`process.stdout.on("resize", scheduleResizeSettle)` is registered per activation, so it is removed
+per activation in `session_shutdown`. Before that `.off`, every `/reload` stacked another listener
+whose closure pinned the whole dead activation — the one unbounded leak the review found — and one
+resize then ran a forced full repaint per reload ever done. `scheduleResizeSettle` and its timer, and
+`mountSidebar` (reached from two `setTimeout(0)` sites), now refuse when `dead`.
 
 ## Invariants a future change must not break
 

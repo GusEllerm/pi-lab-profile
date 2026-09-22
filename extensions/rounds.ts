@@ -74,9 +74,19 @@ export default function (pi: ExtensionAPI): void {
 	 * dead-checked, and a reload quietly orphans the round rather than taking pi with it.
 	 */
 	let dead = false;
+	/**
+	 * Every phase currently waiting on pi-subagents, as a function that settles it. A `/reload` takes
+	 * the completion listeners with it -- the host unsubscribes the old activation's `pi.events.on`
+	 * -- so a phase in flight would otherwise sit until its 20-minute timer, then retry on a dead
+	 * activation and throw from a continuation nothing catches. Shutdown settles them all at once.
+	 */
+	const pending = new Set<() => void>();
 	pi.on("session_shutdown", () => {
 		dead = true;
+		for (const settle of pending) settle();
+		pending.clear();
 	});
+	const RELOADED: AgentOutcome = { status: "error", error: "session reloaded before this phase finished" };
 
 	function emit(event: string, payload: unknown): void {
 		if (dead) return;
@@ -102,18 +112,34 @@ export default function (pi: ExtensionAPI): void {
 
 	/** Spawn one role through pi-subagents' RPC and wait for its result. */
 	async function runPhase(role: string, description: string, prompt: string, model?: string): Promise<AgentOutcome> {
+		if (dead) return RELOADED;
 		const spawn = (withModel?: string) =>
 			new Promise<SpawnReply>((resolve) => {
+				if (dead) return resolve({ error: RELOADED.error });
 				const requestId = `rounds-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-				const timer = setTimeout(() => {
+				let done = false;
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				let unsub = () => {};
+				const finish = (reply: SpawnReply) => {
+					if (done) return;
+					done = true;
+					if (timer) clearTimeout(timer);
 					unsub();
-					resolve({ error: "pi-subagents did not answer the spawn request" });
-				}, SPAWN_REPLY_MS);
-				const unsub = pi.events.on(`subagents:rpc:spawn:reply:${requestId}`, (reply: any) => {
-					clearTimeout(timer);
-					unsub();
-					resolve(reply?.success ? { id: (reply.data as { id?: string })?.id } : { error: String(reply?.error ?? "spawn refused") });
-				});
+					pending.delete(abort);
+					resolve(reply);
+				};
+				const abort = () => finish({ error: RELOADED.error });
+				// subscribe *before* arming the timer: a throw here (dead activation) must not leave a
+				// timer that later reaches for an unsubscriber that was never assigned
+				try {
+					unsub = pi.events.on(`subagents:rpc:spawn:reply:${requestId}`, (reply: any) =>
+						finish(reply?.success ? { id: (reply.data as { id?: string })?.id } : { error: String(reply?.error ?? "spawn refused") }),
+					);
+				} catch {
+					return abort();
+				}
+				timer = setTimeout(() => finish({ error: "pi-subagents did not answer the spawn request" }), SPAWN_REPLY_MS);
+				pending.add(abort);
 				emit("subagents:rpc:spawn", {
 					requestId,
 					type: role,
@@ -131,22 +157,39 @@ export default function (pi: ExtensionAPI): void {
 		if (cancelled) stopAgent(id); // /round stop landed while this one was still starting up
 
 		const outcome = await new Promise<AgentOutcome>((resolve) => {
-			const timer = setTimeout(() => {
-				stop();
-				resolve({ status: "error", error: `${role} did not finish within ${SPAWN_TIMEOUT_MS / 60000} minutes` });
-			}, SPAWN_TIMEOUT_MS);
+			if (dead) return resolve(RELOADED);
+			let done = false;
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let unsubscribe = () => {};
+			const finish = (result: AgentOutcome) => {
+				if (done) return;
+				done = true;
+				if (timer) clearTimeout(timer);
+				unsubscribe();
+				pending.delete(abort);
+				resolve(result);
+			};
+			const abort = () => finish(RELOADED);
 			const onDone = (data: any) => {
-				if (data?.id !== id) return;
-				clearTimeout(timer);
-				stop();
-				resolve(data as AgentOutcome);
+				if (data?.id === id) finish(data as AgentOutcome);
 			};
-			const unsubDone = pi.events.on("subagents:completed", onDone);
-			const unsubFail = pi.events.on("subagents:failed", onDone);
-			const stop = () => {
-				unsubDone();
-				unsubFail();
-			};
+			try {
+				const unsubDone = pi.events.on("subagents:completed", onDone);
+				const unsubFail = pi.events.on("subagents:failed", onDone);
+				unsubscribe = () => {
+					unsubDone();
+					unsubFail();
+				};
+			} catch {
+				return abort();
+			}
+			timer = setTimeout(() => {
+				// The agent is still running; forgetting it would leave it unreachable by /round stop,
+				// its eventual completion nudged into the main model, and a retry running beside it.
+				stopAgent(id);
+				finish({ status: "error", error: `${role} did not finish within ${SPAWN_TIMEOUT_MS / 60000} minutes` });
+			}, SPAWN_TIMEOUT_MS);
+			pending.add(abort);
 		});
 		// we report the result ourselves; stop pi-subagents notifying about it as well (must be
 		// inside the 200ms nudge hold, so no awaits between the event and this emit)
@@ -241,6 +284,7 @@ export default function (pi: ExtensionAPI): void {
 		const configured = cfg.panel?.length ? cfg.panel : DEFAULTS.panel;
 		const panel = configured.slice(0, Math.max(1, Math.min(configured.length, seats)));
 		const announce = (phase: string) => {
+			if (dead) return; // ctx throws now; the slot emit below is dead-checked on its own
 			if (running) running.phase = phase;
 			if (ctx.hasUI) ctx.ui.setStatus("rounds", undefined); // the sidebar slot is the one place this shows
 			publish(`round ${phase}`, "busy", () => [phase, task.slice(0, 60), `${Math.round((Date.now() - (running?.since ?? 0)) / 1000)}s · /round stop`]);
@@ -259,6 +303,7 @@ export default function (pi: ExtensionAPI): void {
 						cfg.dev,
 					);
 					phases.push({ role: "dev", title: `Dev${suffix}`, outcome: dev });
+					if (dead) return;
 					if (failed(dev) || cancelled) break;
 					carry = text(dev);
 				}
@@ -273,11 +318,13 @@ export default function (pi: ExtensionAPI): void {
 				);
 				// One retry per seat. These endpoints drop a turn now and then, and a seat that says
 				// nothing costs the panel a whole viewpoint for a failure that usually does not repeat.
+				if (dead) return;
 				seated = await Promise.all(
 					seated.map(async (s) =>
-						failed(s.outcome) && !cancelled ? { ...s, outcome: await runPhase("reviewer", `${seatName(s.n)} retry`, brief, s.seat.model) } : s,
+						failed(s.outcome) && !cancelled && !dead ? { ...s, outcome: await runPhase("reviewer", `${seatName(s.n)} retry`, brief, s.seat.model) } : s,
 					),
 				);
+				if (dead) return;
 				seated.forEach(({ seat, outcome }) =>
 					phases.push({ role: "reviewer", title: `Review${suffix}${panel.length > 1 ? ` — ${seat.label}` : ""}`, outcome }),
 				);
@@ -295,12 +342,14 @@ export default function (pi: ExtensionAPI): void {
 					cfg.critic,
 				);
 				phases.push({ role: "critic", title: `Critique${suffix}`, outcome: critique });
+				if (dead) return;
 				if (failed(critique) || cancelled) break;
 
 				carry = text(critique); // the next round works from what survived scrutiny
 				if (!count(carry, "CONFIRMED")) break; // nothing survived: another dev pass has nothing to fix
 			}
 
+			if (dead) return; // writeReport reads ctx.cwd, which throws on a replaced activation
 			const critique = [...phases].reverse().find((p) => p.role === "critic" && !failed(p.outcome));
 			const verdict = cancelled ? `stopped after ${phases.length} phase${phases.length === 1 ? "" : "s"}` : verdictLine(critique ? text(critique.outcome) : undefined);
 			const file = writeReport(ctx, task, phases, verdict);
@@ -309,7 +358,6 @@ export default function (pi: ExtensionAPI): void {
 			// other phases trimmed. The whole thing is on disk, and a round that pastes three agent
 			// transcripts into the context window has spent the budget it was meant to save.
 			const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n).trimEnd()}\n… (${s.length - n} more characters in the report)`);
-			if (dead) return;
 			pi.sendMessage(
 				{
 					customType: "rounds",
@@ -332,6 +380,22 @@ export default function (pi: ExtensionAPI): void {
 			running = undefined;
 			idleSlot();
 		}
+	}
+
+	/**
+	 * A round runs for minutes after the command that started it has returned, so the host's catch
+	 * around command handlers does not cover it: a rejection here is an unhandled one, and pi has no
+	 * unhandledRejection handler -- on Node 22 that exits the process. This is the only catch it has.
+	 */
+	function launch(ctx: ExtensionContext, work: Promise<void>): void {
+		work.catch((error) => {
+			if (dead) return; // nothing left to tell, and nothing to tell it with
+			try {
+				ctx.ui.notify(`Round failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+			} catch {
+				// the activation went away between the rejection and this line
+			}
+		});
 	}
 
 	/** `--rounds N` and `--reviewers N` in any order, before the task text. */
@@ -371,7 +435,7 @@ export default function (pi: ExtensionAPI): void {
 			}
 			const { rounds, seats, task } = parse(arg, ctx.cwd);
 			if (!task) return ctx.ui.notify("Nothing to do: /round <task>", "warning");
-			void round(ctx, task, rounds, false, seats);
+			launch(ctx, round(ctx, task, rounds, false, seats));
 		},
 	});
 
@@ -409,7 +473,7 @@ export default function (pi: ExtensionAPI): void {
 		description: "Review the working tree as it stands, then verify the review: /review [what to focus on]",
 		handler: async (args, ctx) => {
 			const { seats, task } = parse(args.trim(), ctx.cwd);
-			void round(ctx, task || "the current uncommitted change", 1, true, seats);
+			launch(ctx, round(ctx, task || "the current uncommitted change", 1, true, seats));
 		},
 	});
 

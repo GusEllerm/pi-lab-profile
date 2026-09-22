@@ -1,6 +1,6 @@
 ---
 source: extensions/fleet.ts
-source-hash: ae9ebcac42bb59a5256fcca9f65cfedbd6639df0
+source-hash: c36166e8d06bfd93cd14d5ed863c17d067dfbaad
 documented: 2026-09-20
 ---
 
@@ -173,6 +173,13 @@ the editor. The widget's `render()` repairs `selectedId` if its agent has droppe
 snapping to the last row.
 
 Grep for: `onTerminalInput`, `promptDepth`, `keysHeld`, `isKeyRelease`, `matchesKey`, `selectedId`.
+
+### Fire-and-forget promises (fixed 22 Sept 2026)
+
+The `s` (steer) key launched `ctx.ui.input(...).then(...)` with no `.catch`. pi has no
+`unhandledRejection` handler, so a rejected `steer()` — or a `notify` on an activation that went
+stale during it — would have exited the process. It now has a `.catch` and a `dead` check after the
+await, matching the `input` hook and `/agent-model` beside it.
 
 ## Invariants a future change must not break
 
