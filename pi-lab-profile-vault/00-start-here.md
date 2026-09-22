@@ -99,6 +99,8 @@ These are not style preferences. Each one is a bug that already happened, twice 
 - **Upstream bugs and the workarounds carried here**: [[architecture/upstream-workarounds]].
 - **The scroll-lag investigation**: [[investigations/scroll-lag-2026-09]] — worth reading as method,
   not just conclusion.
+- **hpc-bridge as a packaged tool**: [[investigations/hpc-bridge-integration]] — what the plugin is,
+  what Pi offers to meet it, three options and a recommendation. Nothing built yet.
 - **Full review, 22 Sept 2026**: [[investigations/review-2026-09-22]] — five highs, seventeen mediums,
   every one verified against the code, and all closed the same day except one unverified low. Read
   it for the host facts it established and for the shape of the bugs this codebase tends to grow.
