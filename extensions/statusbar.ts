@@ -270,11 +270,18 @@ class ContextTrail {
 
 /** Read-only overlay: sections of rows with a label gutter. Esc/Enter/q close; e, a run commands. */
 class Dashboard implements Component {
-	constructor(
-		private sections: [string, string[]][],
-		private theme: Theme,
-		private close: (command?: string) => void,
-	) {}
+	// Plain fields, not constructor parameter properties: Node's strip-only TypeScript mode cannot
+	// parse those, and scripts/check.sh's parse step relies on it -- a whitelist entry used to hide
+	// that this file was never really parse-checked.
+	private sections: [string, string[]][];
+	private theme: Theme;
+	private close: (command?: string) => void;
+
+	constructor(sections: [string, string[]][], theme: Theme, close: (command?: string) => void) {
+		this.sections = sections;
+		this.theme = theme;
+		this.close = close;
+	}
 	render(width: number): string[] {
 		const t = this.theme;
 		const inner = Math.max(20, width - 4);
