@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 73c81cf4eb6033fa1256d8249ca04871294c4eeb
+source-hash: aa4612d607782f8c17b3aa7099d2cf44327b43ac
 documented: 2026-09-20
 ---
 
@@ -105,7 +105,7 @@ extrapolating a step into "full in ~12 min" was confidently wrong. Values in eve
 never shown as a value; TOTAL's second line exists only when agents contributed; the pin bar's hint
 sits beside the pinned text.
 
-`AGENTS` renders rows from the `agents` slot's `details()` — read in the *body*, never the key. Idle,
+`HPC` (from [[hpc-bridge]]'s slot) appears like `ROUND` does, only while a facility is connected. `AGENTS` renders rows from the `agents` slot's `details()` — read in the *body*, never the key. Idle,
 it holds its position with one dim `none running` line so the column does not reshuffle when a round
 starts.
 

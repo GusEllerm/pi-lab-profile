@@ -39,6 +39,7 @@ regular mode draws into the terminal's own scrollback and has no layout root to 
 | `/pin` | the pinned copy of your last message above the transcript, on/off |
 | `/images` | keep only the newest N images in context |
 | `/mcp` | MCP servers started for this session and their tools — Pi has no MCP of its own; this profile adds it |
+| `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
 
 ### The review panel
 
@@ -86,7 +87,10 @@ turns any resource you name into a skill. The lab config ships
 [hpc-bridge](https://github.com/globus-labs/hpc-bridge) — drive a supercomputer from the session:
 find a facility, log in to Globus once, start a billed block, run commands on it, release it. It
 needs `uv` on `PATH`; the Globus Labs cluster is in its public registry as a multi-user endpoint, so
-it attaches with no SSH.
+it attaches with no SSH. `extensions/hpc-bridge.ts` adds what the plugin has on no host: a billed
+block is started only after you confirm it in a dialog naming the facility, partition and account
+(headless sessions cannot start one), inline credentials are refused on the shell tools, and the
+column shows the facility, block state and spend while connected.
 
 ```json
 { "servers": { "hpc": { "command": "uvx", "args": ["--from", "git+https://github.com/globus-labs/hpc-bridge", "hpc-bridge"],
@@ -96,7 +100,7 @@ it attaches with no SSH.
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · code-panels · image-window
+extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · hpc-bridge · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
 profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), mcp.json (hpc-bridge), bin helpers
 profiles/example/  a rounds.json template

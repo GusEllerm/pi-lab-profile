@@ -368,6 +368,7 @@ export default function (pi: ExtensionAPI): void {
 		const sections: [string, string[]][] = [
 			["ENDPOINT", ep?.details?.() ?? [ep?.text ?? "unknown"]],
 			["AGENTS", slots.get("agents")?.details?.() ?? ["none running"]],
+			["HPC", slots.get("hpc")?.details?.() ?? ["no facility connected"]],
 			[
 				"TOTAL",
 				(() => {
@@ -803,6 +804,11 @@ export default function (pi: ExtensionAPI): void {
 			// that never run one rather than sitting there permanently dimmed
 			const rnd = slots.get("round");
 			if (rnd && rnd.state !== "idle") section("ROUND", rnd.state, rnd.details?.() ?? [rnd.text]);
+
+			// hpc-bridge.ts only: a facility connected through the MCP bridge, with the block and the
+			// spend so far -- hidden until then, like ROUND, rather than a permanent dimmed row
+			const hpc = slots.get("hpc");
+			if (hpc && hpc.state !== "idle") section("HPC", hpc.state as SlotState, hpc.details?.() ?? [hpc.text]);
 
 			const cache = usage.prompt ? `cache ${((100 * usage.cacheRead) / usage.prompt).toFixed(0)}% · ` : "";
 			const sp = speedText(speed.read());

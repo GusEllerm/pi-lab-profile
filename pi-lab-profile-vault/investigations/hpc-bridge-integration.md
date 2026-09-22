@@ -1,6 +1,6 @@
 ---
 documented: 2026-09-22
-status: A + C built as the proof of concept (extensions/mcp.ts, profiles/lab/mcp.json) and verified live; B open
+status: A + C built (extensions/mcp.ts) and B built (extensions/hpc-bridge.ts); all verified live
 sources: hpc-bridge repo at ~/Projects/hpc-bridge (main, plugin 0.1.17), its vault, and the hpc-bridge Claude session's inventory; Pi 0.87.0 docs and types
 ---
 
