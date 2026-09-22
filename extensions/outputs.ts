@@ -80,12 +80,13 @@ const oneLine = (s: string, n: number) => {
 };
 
 /** Walk the session and collect everything worth re-reading, tagged with the message it followed. */
-function collect(ctx: ExtensionContext): Item[] {
+/** Everything worth opening in a session branch, in order, each tagged with the prompt it followed. */
+export function collectFrom(branch: readonly unknown[]): Item[] {
 	const items: Item[] = [];
 	const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
 	let prompt = "(before your first message)";
 	let n = 0;
-	for (const entry of (ctx.sessionManager?.getBranch?.() ?? []) as { type?: string; message?: any; timestamp?: string }[]) {
+	for (const entry of branch as { type?: string; message?: any; timestamp?: string }[]) {
 		const m = entry?.message;
 		if (entry?.type !== "message" || !m) continue;
 		const at = entry.timestamp ? Date.parse(entry.timestamp) : undefined;
@@ -462,11 +463,25 @@ export default function (pi: ExtensionAPI): void {
 		);
 	}
 
+	/**
+	 * While attached to a subagent (fleet.ts), the transcript on screen is that agent's, so /open
+	 * lists that agent's artefacts rather than the parent's. fleet publishes a live branch accessor
+	 * on the same event the column uses; detaching publishes an empty payload.
+	 */
+	let attached: { name: string; branch: () => readonly unknown[] } | undefined;
+	pi.events.on("statusbar:attached", (data) => {
+		const d = data as { name?: string; branch?: () => readonly unknown[] } | undefined;
+		attached = d?.name && typeof d.branch === "function" ? { name: d.name, branch: d.branch } : undefined;
+	});
+	const collect = (ctx: ExtensionContext): Item[] =>
+		collectFrom(attached ? attached.branch() : ((ctx.sessionManager?.getBranch?.() ?? []) as unknown[]));
+	const whose = () => (attached ? `in ${attached.name}` : "in this session");
+
 	pi.registerCommand("open", {
-		description: "Open a tool result or reasoning block: short ones in a pager, long ones in $EDITOR",
+		description: "Open a tool result or reasoning block from the session you are looking at (the attached agent's, when attached)",
 		handler: async (args, ctx) => {
 			const items = collect(ctx);
-			if (!items.length) return ctx.ui.notify("Nothing to open yet — no tool results or reasoning in this session.", "info");
+			if (!items.length) return ctx.ui.notify(`Nothing to open yet ${whose()} — no tool results or reasoning.`, "info");
 
 			const arg = args.trim().toLowerCase();
 			const filtered = arg

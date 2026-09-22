@@ -1,6 +1,6 @@
 ---
 source: extensions/outputs.ts
-source-hash: 33f50cd263d997f031b798756cff8c4078b4c86f
+source-hash: 0177ac4e3c95df6a4240974ca591d4c8f94688ea
 documented: 2026-09-20
 ---
 
@@ -179,6 +179,15 @@ ever left without the user being told where the file is.
   gave 0 and a non-number gave `NaN` (silently inverting behaviour); knobs are finite-or-default.
   `collect()` treats a non-array `content` as empty instead of throwing and emptying the picker; the
   child-process `error` listener — the one continuation here the host does not catch — is guarded.
+
+### `/open` follows the attached agent (22 Sept 2026)
+
+The collector is `collectFrom(branch)`, pure and exported. `/open` feeds it the parent's branch —
+or, while attached to a subagent through [[fleet]], that agent's: fleet's `statusbar:attached`
+event carries a live `branch()` accessor (read at call time, never captured, since the branch keeps
+growing), and an empty payload on detach restores the parent. The notify says whose session it is
+looking at. Tested in `tests/outputs-collect.test.mjs` through fleet's event. A `bashExecution`
+item carries the command as `detail` and the output as `text`.
 
 ## Invariants a future change must not break
 

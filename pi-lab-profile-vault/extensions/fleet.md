@@ -1,6 +1,6 @@
 ---
 source: extensions/fleet.ts
-source-hash: 6dcc4e9968ce9978ea13fe5a1a771fc8d7a24f27
+source-hash: 7dd52022b70267e9552172ed22d2a12d2fa0fc07
 documented: 2026-09-20
 ---
 
@@ -187,6 +187,12 @@ Deleted: `transcript()`, `forget`, `Tracked.outputTokens` (all confirmed unrefer
 ticker now re-checks the roster from inside its own body: only `render()` used to re-evaluate it,
 and a session without UI never renders, so after the last agent aged out a headless session kept
 emitting a `statusbar:slot` every half second until shutdown.
+
+### The attach event carries the branch (22 Sept 2026)
+
+`statusbar:attached` now includes `branch: () => session.sessionManager.getBranch()` beside `name`
+and `stats`, so [[outputs]] can list the attached agent's artefacts. It is the same accessor the
+pane renders from; the column ignores the extra field.
 
 ## Invariants a future change must not break
 

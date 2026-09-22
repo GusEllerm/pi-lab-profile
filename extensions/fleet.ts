@@ -274,6 +274,9 @@ export default function (pi: ExtensionAPI): void {
 		emit("statusbar:transcript", { component: pane });
 		emit("statusbar:attached", {
 			name: agent.description || agent.type,
+			// Read at call time, never captured: /open lists this agent's artefacts while attached, and
+			// the branch keeps growing under it. Same accessor the pane itself renders from.
+			branch: () => (live(agent.id)?.session?.sessionManager?.getBranch?.() ?? []) as unknown[],
 			stats: () => {
 				const info = live(agent.id);
 				return {
