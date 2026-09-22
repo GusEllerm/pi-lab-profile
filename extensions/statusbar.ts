@@ -52,6 +52,7 @@ import {
 	type TuiMouseEvent,
 	VStack,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
 // The sidebar narrows with the terminal rather than vanishing; it only goes away when even a
@@ -105,7 +106,7 @@ function sidebarWidthFor(termWidth: number, override: number): number {
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m|\x1b\]8;;[^\x07]*\x07/g, "");
 const fmt = (n: number) =>
-	n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k` : `${n}`;
+	n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k` : `${Math.round(n)}`;
 const secs = (ms: number) => {
 	const s = Math.max(0, Math.round(ms / 1000));
 	return s < 120 ? `${s}s` : s < 7200 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`;
@@ -471,10 +472,11 @@ export default function (pi: ExtensionAPI): void {
 			// or the tint stops short of the edges and looks like a bug.
 			const hint = "ctrl+shift+↑";
 			const gutter = 2;
-			const room = Math.max(10, width - hint.length - gutter * 2 - 3);
+			const room = Math.max(10, width - hint.length - gutter * 2 - 6);
 			const text = truncateToWidth(oneLine(pinnedPrompt), room, "…");
-			const filler = Math.max(1, width - gutter - 2 - visibleWidth(text) - hint.length - gutter);
-			const line = `${" ".repeat(gutter)}▲ ${text}${" ".repeat(filler)}${hint}${" ".repeat(gutter)}`;
+			// hint right after the text, then the shading runs to the edge
+			const body = `${" ".repeat(gutter)}▲ ${text}  ·  ${hint}`;
+			const line = body + " ".repeat(Math.max(0, width - visibleWidth(body)));
 			const lines = [t.bg("userMessageBg", t.fg("muted", line))];
 			pinCache = { key, lines };
 			return lines;
@@ -687,14 +689,20 @@ export default function (pi: ExtensionAPI): void {
 			const section = (label: string, state: SlotState | undefined, values: string[]) => {
 				const mark = state && MARK[state];
 				if (compact) lines.push(t.fg("dim", label) + (mark ? ` ${t.fg(mark[1], mark[0])}` : ""));
-				values.forEach((v, i) => {
-					const head = compact
-						? "  "
-						: i === 0
-							? t.fg("dim", label.padEnd(9)) + (mark ? t.fg(mark[1], mark[0]) : " ") + " "
-							: " ".repeat(11);
-					lines.push(head + truncateToWidth(v, valueWidth, "…"));
-				});
+				// Wrapped onto continuation lines rather than cut with "…": the column is tall and narrow,
+				// so a value that does not fit costs a row, which it has, not its ending, which it needs.
+				let first = true;
+				for (const v of values) {
+					for (const piece of wrapTextWithAnsi(v, valueWidth)) {
+						const head = compact
+							? "  "
+							: first
+								? t.fg("dim", label.padEnd(9)) + (mark ? t.fg(mark[1], mark[0]) : " ") + " "
+								: " ".repeat(11);
+						lines.push(head + piece);
+						first = false;
+					}
+				}
 				lines.push("");
 			};
 
@@ -741,13 +749,24 @@ export default function (pi: ExtensionAPI): void {
 			const rate = trail.rate();
 			// How long the remaining context lasts at the current burn: the actionable form of 92%.
 			const minutesLeft = rate && left !== undefined ? left / rate : undefined;
-			const spark = trail.spark(Math.min(12, valueWidth - 10));
+			// The trajectory earns its rows only while the context is actually filling: a flat spark
+			// beside "9/min" says nothing anyone needed, and that is what an idle minute produces. The
+			// spark is labelled, because unlabelled it read as a second, mysterious graph. The countdown
+			// wants sustained growth -- three levels, not one jump: a single 9k reply is a step, and
+			// extrapolating a step into "full in ~12 min" was confidently wrong.
+			const spark = trail.spark(Math.min(8, valueWidth - 13));
+			const levels = new Set(spark).size;
+			const moving = rate !== undefined && rate >= 1000 && levels > 1;
+			const sustained = moving && levels >= 3 && minutesLeft !== undefined && minutesLeft < 600;
 			section("CONTEXT", ctxState, [
 				`${pct == null ? "?" : `${pct.toFixed(1)}%`}${left === undefined ? "" : ` · ${fmt(left)} left`}`,
 				t.fg(barColor, "█".repeat(filled)) + t.fg("borderMuted", "░".repeat(Math.max(0, valueWidth - filled))),
-				...(spark && rate ? [`${t.fg("borderAccent", spark)}  ${t.fg("dim", `${fmt(rate)}/min`)}`] : []),
-				...(minutesLeft !== undefined && minutesLeft < 600
-					? [t.fg(ctxState === "error" ? "error" : "dim", `full in ~${minutesLeft < 1 ? "<1" : Math.round(minutesLeft)} min`)]
+				...(moving ? [`${t.fg("borderAccent", spark)} ${t.fg("dim", "past minute")}`] : []),
+				...(moving
+					? [
+							t.fg("dim", `${fmt(rate)}/min`) +
+								(sustained ? t.fg(ctxState === "error" ? "error" : "dim", ` · full ~${minutesLeft < 1 ? "<1" : Math.round(minutesLeft)}m`) : ""),
+						]
 					: []),
 			]);
 
@@ -795,11 +814,11 @@ export default function (pi: ExtensionAPI): void {
 			section("USAGE", undefined, [
 				`in ${fmt(usage.prompt)} · out ${fmt(usage.output)}`,
 				t.fg("dim", `${cache}${fmt(usage.calls)} call${usage.calls === 1 ? "" : "s"}`),
-				...(sp ? [sp.live ? t.fg("accent", sp.text) : t.fg("dim", sp.text)] : []),
+				...(sp && sp.text !== "…" ? [sp.live ? t.fg("accent", sp.text) : t.fg("dim", sp.text)] : []),
 			]);
 			section("TOTAL", undefined, [
 				t.fg("text", fmt(sessionTokens + agentTokens)),
-				t.fg("dim", agentTokens ? `${fmt(sessionTokens)} + ${fmt(agentTokens)} agents` : "this session"),
+				...(agentTokens ? [t.fg("dim", `${fmt(sessionTokens)} + ${fmt(agentTokens)} agents`)] : []),
 			]);
 
 			const claimed = new Set([...slots.values()].map((x) => x.statusKey).filter(Boolean));

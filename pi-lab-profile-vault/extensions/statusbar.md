@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 1d6d6b90344731504f3a70dbf1b3752d49151fd0
+source-hash: 73c81cf4eb6033fa1256d8249ca04871294c4eeb
 documented: 2026-09-20
 ---
 
@@ -91,10 +91,19 @@ below; then `ROUND` (only once a round has started), `USAGE`, `TOTAL`, `OTHER`.
 trajectory: `ContextTrail` keeps a minute of once-a-second samples and yields `rate()` in tokens per
 minute and `spark(width)` as a block-character sparkline. The spark is normalised to *its own
 window's* min and max, not to the context size — at 92% every bar would otherwise be full, which is
-precisely when the shape matters. A `full in ~N min` line appears when the rate implies one. A flat
-or shrinking context (after a compaction) yields no rate and therefore no countdown. Tested in
-`tests/context-trail.test.mjs`, which slices the class out of this file the way
+precisely when the shape matters. A flat or shrinking context (after a compaction) yields no rate.
+Tested in `tests/context-trail.test.mjs`, which slices the class out of this file the way
 `tests/paint-diff.test.mjs` does.
+
+**When the trajectory shows (22 Sept 2026 pass).** Only while the context is *moving*: rate ≥ 1k
+tokens/min and a non-flat spark. Idle, it produced a flat line beside `9.39231…` — a raw, truncated
+rate of nine tokens a minute — which the user read, reasonably, as "a second graph I don't
+understand". The spark line is labelled `past minute`. The countdown (`22k/min · full ~12m`) needs
+**sustained** growth — three distinct spark levels — because a single 9k reply is a step, and
+extrapolating a step into "full in ~12 min" was confidently wrong. Values in every section now
+**wrap** onto continuation lines instead of truncating with `…`; the streaming placeholder `…` is
+never shown as a value; TOTAL's second line exists only when agents contributed; the pin bar's hint
+sits beside the pinned text.
 
 `AGENTS` renders rows from the `agents` slot's `details()` — read in the *body*, never the key. Idle,
 it holds its position with one dim `none running` line so the column does not reshuffle when a round
