@@ -71,11 +71,31 @@ export function readConfig(cwd: string): Record<string, ServerSpec> {
 	return merged;
 }
 
-/** A skill file needs frontmatter; a resource that already carries it is written verbatim. */
+/** A YAML double-quoted scalar: the one form a description with colons, quotes or hashes is safe in. */
+const yamlString = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, " ")}"`;
+
+/**
+ * A skill file needs frontmatter, and Pi parses it as strict YAML. A resource that already carries
+ * frontmatter has its values re-emitted quoted: hpc-bridge's description reads "SSH is a one-time
+ * bootstrap: stand up…", which Claude Code's loader accepts and Pi rejects as a nested mapping
+ * ("Nested mappings are not allowed in compact mappings"). The body is never touched.
+ */
 export function skillText(body: string, name: string, description?: string): string {
-	if (/^---\r?\n/.test(body)) return body;
-	const desc = (description ?? `Guidance served by an MCP server as ${name}`).replace(/\n/g, " ");
-	return `---\nname: ${name}\ndescription: ${desc}\n---\n\n${body}`;
+	const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(body);
+	if (!m) {
+		const desc = description ?? `Guidance served by an MCP server as ${name}`;
+		return `---\nname: ${yamlString(name)}\ndescription: ${yamlString(desc)}\n---\n\n${body}`;
+	}
+	const fields: Record<string, string> = {};
+	for (const line of m[1].split(/\r?\n/)) {
+		const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
+		if (kv) fields[kv[1]] = kv[2].replace(/^["'](.*)["']$/, "$1");
+	}
+	fields.name ??= name;
+	if (description) fields.description = description;
+	fields.description ??= `Guidance served by an MCP server as ${name}`;
+	const head = Object.entries(fields).map(([k, v]) => `${k}: ${yamlString(v)}`).join("\n");
+	return `---\n${head}\n---\n${body.slice(m[0].length)}`;
 }
 
 /** What a tool call hands back to the model: the text parts joined, images noted, errors flagged. */

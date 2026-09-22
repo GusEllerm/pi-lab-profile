@@ -32,8 +32,12 @@ function fakePi() {
 }
 
 test("pure helpers", () => {
-	assert.equal(skillText("---\nname: x\n---\nbody", "x").startsWith("---\nname: x"), true, "frontmatter is kept verbatim");
-	assert.match(skillText("# Title\n\nbody", "guide", "a guide"), /^---\nname: guide\ndescription: a guide\n---\n\n# Title/);
+	// Pi parses frontmatter as strict YAML; hpc-bridge's real description has colons mid-sentence and
+	// Pi refused it ("Nested mappings are not allowed in compact mappings"). Values come out quoted.
+	const colons = skillText('---\nname: driving-hpc\ndescription: How to drive HPC: stand up a node, then "run" it\n---\n\n# Body\n', "x");
+	assert.match(colons, /^---\nname: "driving-hpc"\ndescription: "How to drive HPC: stand up a node, then \\"run\\" it"\n---\n\n# Body\n$/, colons);
+	assert.match(skillText("# Title\n\nbody", "guide", "a guide"), /^---\nname: "guide"\ndescription: "a guide"\n---\n\n# Title/);
+	assert.match(skillText("---\nname: x\n---\nbody", "ignored"), /^---\nname: "x"\ndescription: "Guidance served/, "a missing description is supplied");
 	assert.equal(flattenContent([{ type: "text", text: "a" }, { type: "image", mimeType: "image/png" }, { type: "text", text: "b" }]), "a\n[image image/png]\nb");
 	assert.equal(flattenContent([]), "");
 });
@@ -85,7 +89,7 @@ test("a real stdio server: tools registered, calls forwarded, resource becomes a
 		const found = discover({ type: "resources_discover", cwd, reason: "startup" });
 		assert.equal(found.skillPaths.length, 1);
 		const skill = readFileSync(join(found.skillPaths[0], "SKILL.md"), "utf8");
-		assert.match(skill, /^---\nname: fixture-guide\ndescription: how to use it\n---/, "frontmatter added because the resource had none");
+		assert.match(skill, /^---\nname: "fixture-guide"\ndescription: "how to use it"\n---/, "frontmatter added because the resource had none");
 		assert.match(skill, /Call echo\./);
 
 		// the command reports what is connected
