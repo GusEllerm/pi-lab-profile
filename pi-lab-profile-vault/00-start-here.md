@@ -100,7 +100,8 @@ These are not style preferences. Each one is a bug that already happened, twice 
 - **The scroll-lag investigation**: [[investigations/scroll-lag-2026-09]] — worth reading as method,
   not just conclusion.
 - **Full review, 22 Sept 2026**: [[investigations/review-2026-09-22]] — five highs, seventeen mediums,
-  every one verified against the code; the open-work list for this repo until they are closed.
+  every one verified against the code, and all closed the same day except one unverified low. Read
+  it for the host facts it established and for the shape of the bugs this codebase tends to grow.
 
 ## Conventions for this vault
 
