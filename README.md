@@ -141,7 +141,8 @@ ln -sf "$PWD"/agents/{dev,reviewer,critic}.md ~/.pi/agent/agents/
 ln -sf "$PWD"/profiles/lab/rounds.json ~/.pi/agent/rounds.json
 ```
 
-Edit → `scripts/check.sh` → `/reload` → it is live. Commit and push to publish.
+On a fresh clone, `npm ci` first (the MCP bridge has a runtime dependency; `pi install` does this
+for users). Then edit → `scripts/check.sh` → `/reload` → it is live. Commit and push to publish.
 
 The catch is that a broken edit breaks your running Pi, because there is no staging copy — so run
 the guard *before* reloading, not after. To check what a stranger actually gets, install the

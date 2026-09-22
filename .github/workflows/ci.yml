@@ -19,6 +19,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+
+      - name: Install runtime dependencies
+        # extensions/mcp.ts imports @modelcontextprotocol/sdk; typebox comes in as a peer. The same
+        # production install pi itself runs on `pi install`, so CI tests what a user gets.
+        run: npm ci --omit=dev
 
       - name: Parse every extension
         run: bash scripts/check.sh --parse-only

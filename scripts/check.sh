@@ -22,7 +22,7 @@ fail=0
 for f in *.ts; do
 	# jiti resolves the pi packages and TS parameter properties at load time; plain node does
 	# neither, so those two diagnostics are expected and not failures.
-	out=$(node --no-warnings -e "import('./$f').catch(e=>{const m=e.message.split('\n')[0]; if(!/Cannot find package|MODULE_TYPELESS/.test(m)){console.log('PARSE FAIL: '+m); process.exit(1)}})" 2>&1)
+	out=$(node --no-warnings -e "import('./$f').catch(e=>{const m=e.message.split('\n')[0]; if(!/Cannot find package '@earendil-works|MODULE_TYPELESS/.test(m)){console.log('PARSE FAIL: '+m); process.exit(1)}})" 2>&1)
 	if [ -n "$out" ]; then echo "$f: $out"; fail=1; else echo "$f: parses"; fi
 done
 
