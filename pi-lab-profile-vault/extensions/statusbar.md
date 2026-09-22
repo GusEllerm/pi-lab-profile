@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 11240382bb2cb618e908461954972026f0be86c6
+source-hash: f180073dacfb687bf3edf3a420127151f1c3ac5f
 documented: 2026-09-20
 ---
 
@@ -283,6 +283,22 @@ per activation in `session_shutdown`. Before that `.off`, every `/reload` stacke
 whose closure pinned the whole dead activation — the one unbounded leak the review found — and one
 resize then ran a forced full repaint per reload ever done. `scheduleResizeSettle` and its timer, and
 `mountSidebar` (reached from two `setTimeout(0)` sites), now refuse when `dead`.
+
+### 22 Sept 2026 review fixes
+
+- `/compat` lied after the first `/reload`: `textPatchApplies()` probes through `Text.prototype`,
+  which by then carries the patch, so it saw two widths cached and reported "upstream fixed". The
+  already-installed check now comes *before* the probe and reports "installed by an earlier
+  activation" (M6, verified live).
+- `ContextTrail` is now a minute of *time*: samples older than 60 s are evicted on the next sample.
+  It was sixty *samples*, taken only on frames the column drew, so after an idle stretch `rate()`
+  and `full in ~N min` averaged across the gap (M7; `tests/context-trail.test.mjs` drives the clock).
+- Removed: `PROF_VERSION` and `FrameHook.version` (the abandoned versioning), `noteEvent`/`lastEvent`
+  (nine writers, no reader), `lastDocLines`, `prof.keyMs`; `profSince` moved onto `prof` so the
+  once-ever document wrapper reads the live window; the `.component` branch in `ensureDocWrapped`
+  (the ScrollView holds `child`); a `return` inside the wrapper's `finally` that would have
+  swallowed the render result. `band` is in the memo key. The header comment matches the code again
+  (≥ 72 columns; the pin bar in the layout; the pin bar is clickable).
 
 ## Invariants a future change must not break
 

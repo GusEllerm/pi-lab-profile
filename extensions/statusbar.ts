@@ -4,13 +4,14 @@
  *   ~/Projects/doom (main)                         qwen3.8-flash-next · thinking medium · ctx 16.5% of 262k
  *   ⇄ globus3 ✓           agents 3 ●         images 3/6 ⚠        in 82M · out 300k · cache 96%
  *
- * Wide fullscreen terminals (≥ 120 columns) get a right-hand sidebar beside the transcript instead,
+ * Fullscreen terminals of 72 columns or more get a right-hand sidebar beside the transcript instead,
  * and the footer shrinks to the path. /sidebar off|on toggles it.
  *
  * Every slot is always in the same column; an idle slot is dimmed ("agents –"), never removed.
  * Colour encodes state only: ✓ ok · ⚠ warning · ✗ problem · ● busy.
  * /status opens a dashboard with every section; inside it, e runs /endpoints and a runs /agents.
- * Nothing opens on a click: the footer and sidebar are read-only.
+ * The pin bar is clickable (it jumps the transcript to your last message); the footer and the column
+ * are read-only.
  *
  * Why a whole footer: Pi prints every extension's setStatus() text on one line, sorted by key,
  * joined by a single space and truncated, so statuses run into each other and the last ones fall off.
@@ -31,7 +32,8 @@
  *
  * How the sidebar gets there — relies on Pi internals, checked before use: in fullscreen mode Pi's
  * layout root is VStack[ScrollView transcript, dock] (pi-coding-agent chat-viewport.js), held in the
- * viewport's private `layoutRoot`. We rebuild it as VStack[HStack[transcript, sidebar], dock]. If the
+ * viewport's private `layoutRoot`. We rebuild it as VStack[pin bar, HStack[transcript, sidebar], dock].
+ * If the
  * root is not that shape (a Pi update changed it) nothing is touched and the footer stays as it was.
  * setLayoutRoot is wrapped so the sidebar re-attaches whenever Pi installs a fresh root.
  */
@@ -232,6 +234,10 @@ class ContextTrail {
 		const now = Date.now();
 		const last = this.samples[this.samples.length - 1];
 		if (last && now - last.at < 900) return;
+		// Age-based, not count-based: samples are only taken on frames the column actually draws, so
+		// after an idle stretch a count-limited ring would average this burst against samples from
+		// hours ago and report a rate and a countdown that describe the gap, not the present.
+		while (this.samples.length && now - this.samples[0].at > 60_000) this.samples.shift();
 		this.samples.push({ at: now, used });
 		if (this.samples.length > 60) this.samples.shift();
 	}
@@ -318,7 +324,6 @@ export default function (pi: ExtensionAPI): void {
 		rerender("statusbar:transcript");
 	});
 	pi.events.on("statusbar:attached", (data) => {
-		noteEvent("attached");
 		attached = (data as { name?: string; stats?: () => AttachedStats } | undefined)?.name
 			? (data as { name: string; stats: () => AttachedStats })
 			: undefined;
@@ -326,7 +331,6 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.events.on("statusbar:slot", (data) => {
-		noteEvent("slot");
 		const slot = data as Slot;
 		if (!slot?.id) return;
 		slots.set(slot.id, slot);
@@ -537,7 +541,7 @@ export default function (pi: ExtensionAPI): void {
 	let slotsVersion = 0;
 	let sidebarCache: { key: string; lines: string[] } | undefined;
 	/** /prof: what this column actually costs in a real session, since benchmarks keep missing it. */
-	const prof = { renders: 0, hits: 0, ms: 0, keyMs: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, motionChunks: 0, hoverReinstalls: 0, hoverWrappers: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
+	const prof = { renders: 0, hits: 0, ms: 0, settles: 0, passes: 0, passMs: 0, passWorst: 0, frames: 0, frameMs: 0, frameWorst: 0, bytes: 0, rows: 0, writeMs: 0, worstFrames: [] as string[], worstDocs: [] as string[], since: Date.now(), gc: [] as string[], gcMs: 0, textHits: 0, textMisses: 0, hoversDropped: 0, motionChunks: 0, hoverReinstalls: 0, hoverWrappers: 0, colBytes: 0, colCells: 0, widths: new Map<number, number>(), asks: new Map<string, number>() };
 
 	/**
 	 * pi-tui builds a fresh render cache every frame (`renderLayoutFrame` → `renderCache: new Map()`)
@@ -555,9 +559,9 @@ export default function (pi: ExtensionAPI): void {
 	 * no renders" across 265 frames. Keep the ScrollView (which is stable) and re-wrap whenever its
 	 * child changes: a pointer compare, once per frame.
 	 */
-	let scrollRef: (Component & { child?: Component; component?: Component }) | undefined;
+	let scrollRef: (Component & { child?: Component }) | undefined;
 	function ensureDocWrapped(): void {
-		const doc = scrollRef?.child ?? scrollRef?.component;
+		const doc = scrollRef?.child;
 		if (doc && !(doc as { __profWrapped?: boolean }).__profWrapped) instrumentTranscript(undefined);
 	}
 
@@ -571,11 +575,10 @@ export default function (pi: ExtensionAPI): void {
 			}
 			return undefined;
 		};
-		// ScrollView holds the document in a private `child`; the layout node exposes the same
-		// object as `component`, which is what renderCached() calls render() on.
-		scrollRef = (find(root, 0) as (Component & { child?: Component; component?: Component }) | undefined) ?? scrollRef;
+		// ScrollView holds the document in a private `child`, the object renderCached() renders.
+		scrollRef = (find(root, 0) as (Component & { child?: Component }) | undefined) ?? scrollRef;
 		const scroll = scrollRef;
-		const doc = (scroll?.child ?? scroll?.component) as (Component & { __profWrapped?: boolean }) | undefined;
+		const doc = scroll?.child as (Component & { __profWrapped?: boolean }) | undefined;
 		if (!doc || doc.__profWrapped) return;
 		doc.__profWrapped = true;
 
@@ -592,20 +595,20 @@ export default function (pi: ExtensionAPI): void {
 			let result: string[] | undefined;
 			try {
 				result = original(width);
-				lastDocLines = result?.length ?? 0;
 				return result;
 			} finally {
 				const d = performance.now() - t0;
 				const prof = sink.prof;
-				if (!prof) return;
+				if (prof) {
 				if (d > 40) {
-					prof.worstDocs.push(`${d.toFixed(0)}ms @${width}col at +${((Date.now() - profSince) / 1000).toFixed(0)}s`);
+					prof.worstDocs.push(`${d.toFixed(0)}ms @${width}col at +${((Date.now() - prof.since) / 1000).toFixed(0)}s`);
 					if (prof.worstDocs.length > 6) prof.worstDocs.shift();
 				}
 				prof.passes++;
 				prof.passMs += d;
 				prof.widths.set(width, (prof.widths.get(width) ?? 0) + 1);
 				if (d > prof.passWorst) prof.passWorst = d;
+				}
 			}
 		};
 	}
@@ -617,6 +620,7 @@ export default function (pi: ExtensionAPI): void {
 		return [
 			width,
 			rowHeight,
+			(scrollRef as { viewportHeight?: number } | undefined)?.viewportHeight ?? "", // the band the hint row is anchored to
 			c.ui.theme.fg("accent", "·"), // cheap theme fingerprint: the escape codes change with the theme
 			c.model ? `${c.model.provider}/${c.model.id}` : "",
 			pi.getThinkingLevel(),
@@ -649,9 +653,7 @@ export default function (pi: ExtensionAPI): void {
 			guardHover(); // a descriptor read on the real object; pi-cc restores the slot on its own shutdown
 			const t0 = performance.now();
 			const key = sidebarKey(width, c);
-			const t1 = performance.now();
 			prof.renders++;
-			prof.keyMs += t1 - t0;
 			if (sidebarCache?.key === key) {
 				prof.hits++;
 				for (const line of sidebarCache.lines) {
@@ -851,18 +853,6 @@ export default function (pi: ExtensionAPI): void {
 	 * keep profiling the one part that is already cheap. Instance-patched, once per TUI, with the
 	 * counters repointed on reload rather than the wrapper re-applied.
 	 */
-	/**
-	 * A single document render of 136.7ms inside a 149ms frame, with 104 others at 0.7ms, says
-	 * pi-cc's per-message memo is being thrown away wholesale rather than the document being
-	 * expensive. So note what happened immediately before each slow render: if every stall follows
-	 * the same event, that event is the invalidation.
-	 */
-	let lastEvent = { name: "none", at: 0 };
-	const noteEvent = (name: string) => {
-		lastEvent = { name, at: Date.now() };
-	};
-	let lastDocLines = 0;
-	let profSince = Date.now();
 
 	/**
 	 * Why this patch exists.
@@ -921,18 +911,24 @@ export default function (pi: ExtensionAPI): void {
 			compat.textCache = "off (PI_TEXT_CACHE=off)";
 			return;
 		}
+		const proto = Text.prototype as unknown as {
+			[TEXT_PATCH]?: boolean;
+			render(width: number): string[];
+			invalidate?: () => void;
+		};
+		// Before the probe, not after: the probe renders through Text.prototype, so once the patch is
+		// in it sees two widths cached and concludes upstream fixed it -- which is how /compat
+		// reported this patch retired on every activation after the first.
+		if (proto[TEXT_PATCH]) {
+			compat.textCache = "active — installed by an earlier activation of this process";
+			return;
+		}
 		const why = textPatchApplies();
 		if (why) {
 			compat.textCache = `not applied — ${why}`;
 			return;
 		}
 		compat.textCache = "active — one cache entry per width";
-		const proto = Text.prototype as unknown as {
-			[TEXT_PATCH]?: boolean;
-			render(width: number): string[];
-			invalidate?: () => void;
-		};
-		if (proto[TEXT_PATCH]) return;
 		proto[TEXT_PATCH] = true;
 		const renderText = proto.render;
 		proto.render = function (this: Text & { __widthCache?: Map<number, CachedText> }, width: number) {
@@ -991,17 +987,7 @@ export default function (pi: ExtensionAPI): void {
 	/** Accounting for the frame currently being drawn; the mean frame is fine, the tail is not. */
 	let frame = { bytes: 0, rows: 0, writeMs: 0, full: false };
 	const FRAME_HOOK = Symbol.for("pi-statusbar:frame-hook");
-	type FrameHook = { prof?: typeof prof; version?: number };
-	/**
-	 * Bump when the instrumentation changes shape. These wrappers live on objects that outlive the
-	 * activation -- the TUI, the transcript document -- so after /reload the *previous build's*
-	 * wrapper is still the one running. It keeps incrementing the fields it knew about and silently
-	 * skips the ones added since, which is how /prof reported a 144ms worst frame with no slow-frame
-	 * record and "write 0% of frame time" while happily counting bytes. A version tag makes a stale
-	 * wrapper detectable: it is silenced (its counters unset, so it falls through as a passthrough)
-	 * and the current one is installed over it.
-	 */
-	const PROF_VERSION = 10;
+	type FrameHook = { prof?: typeof prof };
 
 	/**
 	 * Every wrapper below lives on an object that outlives this activation -- the TUI, the
@@ -1041,7 +1027,7 @@ export default function (pi: ExtensionAPI): void {
 			existing.prof = prof; // one wrapper per TUI, ever: just point it at the live counters
 			return;
 		}
-		const hook: FrameHook = { prof, version: PROF_VERSION };
+		const hook: FrameHook = { prof };
 		t[FRAME_HOOK] = hook;
 		const renderFrame = t.doRender?.bind(tui);
 		if (renderFrame)
@@ -1410,7 +1396,6 @@ export default function (pi: ExtensionAPI): void {
 
 	// what you just asked, caught as you send it
 	pi.on("input", (event) => {
-		noteEvent("input");
 		const text = (event as { text?: string })?.text?.trim();
 		if (!text || text.startsWith("/")) return undefined; // a command is not a question to be reminded of
 		pinnedPrompt = text;
@@ -1456,21 +1441,17 @@ export default function (pi: ExtensionAPI): void {
 	});
 	// message_end fires before Pi appends the message to the session, so re-sum once the turn is stored
 	pi.on("turn_end", (_event, ctx) => {
-		noteEvent("turn_end");
 		usage = sumUsage(ctx);
 		rerender("turn_end");
 	});
 	pi.on("agent_end", (_event, ctx) => {
-		noteEvent("agent_end");
 		usage = sumUsage(ctx);
 		rerender("agent_end");
 	});
 	pi.on("message_start", (event) => {
-		noteEvent("message_start");
 		if ((event.message as { role?: string })?.role === "assistant") speed.start();
 	});
 	pi.on("message_update", (event) => {
-		noteEvent("message_update");
 		const m = event.message as { role?: string };
 		if (m?.role !== "assistant") return;
 		speed.update(event.message as never);
@@ -1481,14 +1462,10 @@ export default function (pi: ExtensionAPI): void {
 		}
 	});
 	pi.on("message_end", (event) => {
-		noteEvent("message_end");
 		if ((event.message as { role?: string })?.role === "assistant") speed.end(event.message as never);
 		rerender("message_end");
 	});
-	pi.on("model_select", () => {
-		noteEvent("model_select");
-		rerender("model_select");
-	});
+	pi.on("model_select", () => rerender("model_select"));
 
 	pi.registerCommand("compat", {
 		description: "Which upstream workarounds are active, and why — see docs/upstream-hover-width.md",
@@ -1525,7 +1502,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.registerCommand("prof", {
 		description: "What the column costs: renders, cache hits and milliseconds since the last /prof",
 		handler: async (_args, ctx) => {
-			const { renders, hits, ms, keyMs, passes, passMs, passWorst } = prof;
+			const { renders, hits, ms, passes, passMs, passWorst } = prof;
 			const column = renders
 				? `column: ${renders} renders, ${Math.round((100 * hits) / renders)}% cached, ${(ms / renders).toFixed(2)}ms each`
 				: "column: no renders";
@@ -1533,7 +1510,8 @@ export default function (pi: ExtensionAPI): void {
 				? `frames: ${prof.frames}, ${(prof.frameMs / prof.frames).toFixed(1)}ms each, worst ${prof.frameWorst.toFixed(1)}ms, ` +
 					`${(prof.bytes / 1024).toFixed(0)}KB out (${Math.round(prof.bytes / prof.frames)}B/frame = ` +
 					`${(prof.rows / prof.frames).toFixed(1)} rows × ${Math.round(prof.bytes / Math.max(1, prof.rows))}B), ` +
-					`write ${(100 * prof.writeMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time`
+					`write ${(100 * prof.writeMs / Math.max(1, prof.frameMs)).toFixed(0)}% of frame time` +
+					(prof.settles ? `, ${prof.settles} resize settle${prof.settles === 1 ? "" : "s"}` : "")
 				: "frames: none";
 			const wire = prof.colCells
 				? ` · column on the wire: ${(prof.colBytes / Math.max(1, prof.renders)).toFixed(0)}B/frame for ` +
@@ -1562,7 +1540,6 @@ export default function (pi: ExtensionAPI): void {
 			prof.renders = 0;
 			prof.hits = 0;
 			prof.ms = 0;
-			prof.keyMs = 0;
 			prof.settles = 0;
 			prof.passes = 0;
 			prof.passMs = 0;
@@ -1583,7 +1560,7 @@ export default function (pi: ExtensionAPI): void {
 			prof.hoversDropped = 0;
 			prof.motionChunks = 0;
 			prof.hoverReinstalls = 0;
-			profSince = Date.now();
+			prof.since = Date.now();
 			prof.gcMs = 0;
 			prof.colBytes = 0;
 			prof.colCells = 0;

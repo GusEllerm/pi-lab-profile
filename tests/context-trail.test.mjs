@@ -64,3 +64,23 @@ test("the spark shows only the most recent points that fit", () => {
 	const trail = seed(Array.from({ length: 40 }, (_, i) => [i * 1000, i * 100]));
 	assert.equal(trail.spark(10).length, 10);
 });
+
+test("the window is a minute of time, not sixty samples", () => {
+	// Samples are taken only on frames the column draws, so after an idle stretch a count-limited
+	// ring averaged a fresh burst against samples from hours ago. Drive the clock to prove the
+	// old ones are gone before the new one is used.
+	const trail = new ContextTrail();
+	const realNow = Date.now;
+	try {
+		let t = 1_000_000;
+		Date.now = () => t;
+		trail.sample(50_000);            // t = 0s
+		t += 30_000; trail.sample(60_000); // t = 30s: still inside the minute
+		assert.equal(trail.samples.length, 2);
+		t += 3_600_000; trail.sample(61_000); // an hour later: both earlier samples are out of the window
+		assert.equal(trail.samples.length, 1, "samples older than a minute are evicted on the next sample");
+		assert.equal(trail.rate(), undefined, "a single fresh sample yields no rate, rather than one averaged over an hour");
+	} finally {
+		Date.now = realNow;
+	}
+});
