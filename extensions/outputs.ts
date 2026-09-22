@@ -231,12 +231,18 @@ class Picker implements Component {
 	private filter = "";
 	private top = 0; // first visible row, for scrolling the list
 
-	constructor(
-		private all: Item[],
-		private height: number,
-		private theme: Theme,
-		private close: (chosen?: Item) => void,
-	) {
+	// Plain fields rather than constructor parameter properties: Node's strip-only TypeScript mode
+	// cannot parse those, and scripts/check.sh's parse step relies on it.
+	private all: Item[];
+	private height: number;
+	private theme: Theme;
+	private close: (chosen?: Item) => void;
+
+	constructor(all: Item[], height: number, theme: Theme, close: (chosen?: Item) => void) {
+		this.all = all;
+		this.height = height;
+		this.theme = theme;
+		this.close = close;
 		this.rebuild();
 	}
 
@@ -353,13 +359,19 @@ function paintDiff(line: string, t: Theme): string {
 }
 
 class Pager implements Component {
-	constructor(
-		private title: string,
-		private lines: string[],
-		private theme: Theme,
-		private close: () => void,
-		private paint?: (line: string, t: Theme) => string,
-	) {}
+	private title: string;
+	private lines: string[];
+	private theme: Theme;
+	private close: () => void;
+	private paint?: (line: string, t: Theme) => string;
+
+	constructor(title: string, lines: string[], theme: Theme, close: () => void, paint?: (line: string, t: Theme) => string) {
+		this.title = title;
+		this.lines = lines;
+		this.theme = theme;
+		this.close = close;
+		this.paint = paint;
+	}
 	render(width: number): string[] {
 		const t = this.theme;
 		const inner = Math.max(20, width - 4);

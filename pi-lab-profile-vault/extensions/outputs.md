@@ -1,6 +1,6 @@
 ---
 source: extensions/outputs.ts
-source-hash: a3c759eb3505b02ae2d3cf49479a7c8772e1911a
+source-hash: 33f50cd263d997f031b798756cff8c4078b4c86f
 documented: 2026-09-20
 ---
 
