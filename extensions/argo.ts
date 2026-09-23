@@ -352,18 +352,37 @@ export function looksLikePrompt(buffer: string): string | undefined {
 /**
  * A pseudo-terminal relay: runs a command with a pty of its own (ssh reads a Duo prompt from the
  * controlling terminal, never from stdin), copies its output to our stdout, and copies our stdin to
- * its pty. Exits when the command does -- `ssh -f` leaves a master behind on purpose, and waiting
+ * its pty. Returns when the command does -- `ssh -f` leaves a master behind on purpose, and waiting
  * for the pty to close would wait for that. Python's pty module, so nothing new is installed.
+ *
+ * Why the command runs under a wrapper shell that outlives it. Measured 23 Sept 2026: with argo-up
+ * as the pty's session leader, its exit hung up the terminal and the tunnel was dead within a
+ * second -- the daemonised `ssh -f` survives, but the ProxyJump transport (`ssh -W … cels-login`)
+ * is an ordinary child in the foreground process group, and a session leader's exit hangs up its
+ * controlling terminal whatever the children think of SIGHUP (ignoring it before exec was tried).
+ * Run from a plain shell the tunnel lives, because the shell stays leader. So the wrapper `sh` is
+ * the leader: it runs the command, prints its exit code behind a marker the relay reads and never
+ * forwards, then stays alive while PTY_RELAY_HOLD (a shell test, here the tunnel's /health) keeps
+ * passing, every PTY_RELAY_HOLD_S seconds. A detached holder keeps the master open meanwhile and
+ * exits once every slave is closed. argo-down fails the test; wrapper and holder leave by
+ * themselves.
  */
 export const PTY_RELAY = `
 import os, pty, select, sys
 cmd = sys.argv[1:]
+MARK = "__PTY_RELAY_EXIT__ "
+script = (
+    '"$@"; code=$?; printf "\\\\n%s%s\\\\n" "' + MARK + '" "$code"; '
+    'while [ -n "$PTY_RELAY_HOLD" ] && eval "$PTY_RELAY_HOLD"; do sleep "\${PTY_RELAY_HOLD_S:-30}"; done; exit "$code"'
+)
 pid, fd = pty.fork()
 if pid == 0:
-    os.execvp(cmd[0], cmd)
+    os.execvp("sh", ["sh", "-c", script, "sh"] + cmd)
 watch_stdin = True
 exited = None
-while True:
+pending = b""
+mark = MARK.encode()
+while exited is None:
     fds = [fd] + ([0] if watch_stdin else [])
     r, _, _ = select.select(fds, [], [], 0.2)
     if fd in r:
@@ -371,10 +390,23 @@ while True:
             data = os.read(fd, 4096)
         except OSError:
             data = b""
-        if data:
-            os.write(1, data)
-        elif exited is not None:
+        if not data:
+            exited = 1
             break
+        pending += data
+        # complete lines: the marker is swallowed, everything else is forwarded as it is
+        while exited is None and b"\\n" in pending:
+            line, pending = pending.split(b"\\n", 1)
+            text = line.strip()
+            if text.startswith(mark):
+                exited = int(text[len(mark):].strip() or b"1")
+            else:
+                os.write(1, line + b"\\n")
+        # a partial line is forwarded at once -- a Duo prompt has no newline after it -- unless it
+        # could still turn out to be the marker
+        if exited is None and pending and not mark.startswith(pending.strip()):
+            os.write(1, pending)
+            pending = b""
     if 0 in r:
         data = os.read(0, 4096)
         if data:
@@ -385,22 +417,22 @@ while True:
         w, status = os.waitpid(pid, os.WNOHANG)
         if w == pid:
             exited = os.waitstatus_to_exitcode(status)
-            # drain what is left, then stop: the ssh master keeps the pty open forever
-            end = 10
-            while end:
-                r, _, _ = select.select([fd], [], [], 0.1)
-                if not r:
-                    end -= 1
-                    continue
-                try:
-                    data = os.read(fd, 4096)
-                except OSError:
-                    break
-                if not data:
-                    break
-                os.write(1, data)
+if pending and not pending.strip().startswith(mark):
+    os.write(1, pending)
+if os.fork() == 0:
+    # the holder: keeps the master open, without a terminal or stdio, until the last slave closes
+    os.setsid()
+    null = os.open(os.devnull, os.O_RDWR)
+    for n in (0, 1, 2):
+        os.dup2(null, n)
+    while True:
+        try:
+            if not os.read(fd, 4096):
+                break
+        except OSError:
             break
-sys.exit(exited if exited is not None else 1)
+    os._exit(0)
+sys.exit(exited)
 `;
 
 export default async function (pi: ExtensionAPI): Promise<void> {
@@ -518,7 +550,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		}
 		ctx.ui.notify("argo: running argo-up — a Duo prompt will appear here if the bastion needs one", "info");
 		await new Promise<void>((resolve) => {
-			const proc = spawn("python3", ["-c", PTY_RELAY, "argo-up"], { env: { ...process.env, TERM: "dumb" }, stdio: ["pipe", "pipe", "pipe"] });
+			const proc = spawn("python3", ["-c", PTY_RELAY, "argo-up"], {
+				// the wrapper stays alive as the pty's session leader while this passes; argo-down ends it
+				env: { ...process.env, TERM: "dumb", PTY_RELAY_HOLD: `curl -sf -m 3 http://127.0.0.1:${cfg.port}/health >/dev/null` },
+				stdio: ["pipe", "pipe", "pipe"],
+			});
 			child = proc;
 			let buffer = "";
 			let asking = false;
@@ -577,7 +613,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 						const n = await register();
 						ctx.ui.notify(`argo: up on localhost:${cfg?.port} · ${n} models registered — /model to pick one`, "info");
 					} catch (e) {
-						ctx.ui.notify(`argo: tunnel up but the catalogue failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+						const cause = (e as { cause?: { message?: string } })?.cause?.message;
+						ctx.ui.notify(`argo: tunnel up but the catalogue failed: ${e instanceof Error ? e.message : String(e)}${cause ? ` (${cause})` : ""} — /argo reload retries`, "error");
 					}
 					resolve();
 				})();

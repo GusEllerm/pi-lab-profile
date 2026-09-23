@@ -1,6 +1,6 @@
 ---
 source: extensions/argo.ts
-source-hash: 60889e2ba262ae4c3ca3af0b1c0553f45fb84ecd
+source-hash: 80c9cd098daed2a82714e0f7daf93db568f28ea1
 documented: 2026-09-23
 ---
 
@@ -42,9 +42,25 @@ prompt relayed, de-duplicated real models, a privacy badge.
 - **`/argo up`** runs `argo-up` inside a pseudo-terminal (`PTY_RELAY`, Python's `pty`, embedded — no new
   dependency), relays its lines into the chat, and turns a prompt (`looksLikePrompt`: an unterminated
   line asking for a passcode/option/password) into `ctx.ui.input`. The answer goes to the child's
-  pty. The relay exits when `argo-up` does, not when the pty closes — `ssh -f` leaves a master
+  pty. The relay returns when `argo-up` does, not when the pty closes — `ssh -f` leaves a master
   holding it open on purpose. **`/argo down`** runs `argo-down` and unregisters. **`/argo reload`**
   re-reads the catalogue. Startup registers only if `/health` already answers.
+- **The relay's wrapper shell, and why it must outlive argo-up** (found 23 Sept 2026 when the
+  user's first real `/argo up` ended in "tunnel up but the catalogue failed: fetch failed"). With
+  `argo-up` as the pty's session leader its exit hung up the terminal, and the tunnel was dead
+  within a second: the daemonised `ssh -f` processes survive, but the ProxyJump transport
+  (`ssh -W … cels-login`) is an ordinary child in the foreground process group, and a session
+  leader's exit hangs up its controlling terminal whatever the children do about SIGHUP — ignoring
+  it before exec was tried and changed nothing. From a plain shell the tunnel lives, because the
+  shell stays leader. So the relay runs the command under `sh -c '"$@"; printf marker $?; while
+  eval "$PTY_RELAY_HOLD"; do sleep $PTY_RELAY_HOLD_S; done'`: the wrapper is the leader, reports the
+  exit code behind a marker the relay swallows, then polls the tunnel's `/health` every 30 s and
+  exits when it fails (what `argo-down` brings about). A forked, `setsid`'d holder keeps the pty
+  master open meanwhile and exits when the last slave closes. Partial lines are forwarded at once
+  (a Duo prompt has no newline) unless they could still be the marker. The same hang-up kills the
+  tunnel when the terminal window `argo-up` ran in is closed — that is argo-tools' to fix
+  (detach the tunnel ssh from the tty; macOS has no `setsid` binary, `python3 -c 'os.setsid()…'`
+  does it).
 - **`argo:health {up, port, models}`** on the bus, from a 30 s `/health` poll while registered, so
   [[endpoints]] can flip the `ENDPOINT` row to `⚡ argo down` when `argo-down` closes the port, and
   print `55 ids · 38 models` (catalogue entries, then what survives alias folding) in `/endpoints`.
@@ -66,6 +82,9 @@ prompt relayed, de-duplicated real models, a privacy badge.
   hook goes quiet on its own; do not make it unconditional.
 - Prices come from argo-dash first. Do not edit `BUNDLED_PRICING` without re-verifying the dash's
   table; the dash is where rates are checked against Anthropic's page.
+- The relay's pty session leader must not be the command itself. Measure with the tunnel, not
+  reason about signals: the test in `tests/argo.test.mjs` proves the wrapper outlives the command,
+  and the live check is `/argo up` followed by `/health` after Pi has exited.
 
 ## Verified
 

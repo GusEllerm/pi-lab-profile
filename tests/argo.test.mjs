@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import argo, { BUNDLED_PRICING, PTY_RELAY, canonical, dedupe, estimateTokens, family, findOnPath, loadPricing, looksLikePrompt, modelDef, order, parsePricing, providers, ratesFor, readArgoConfig, repairUsage, sessionSpend } from "../extensions/argo.ts";
@@ -223,6 +223,38 @@ test("the pty relay round-trips a prompt: child asks, we answer on stdin, it rea
 		const code = await new Promise((r) => proc.on("close", r));
 		assert.match(out, /got 1/);
 		assert.equal(code, 0, "the child's exit code comes back through the relay");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the relay's wrapper outlives the command while the hold test passes, and leaves when it fails", async () => {
+	// argo-up's tunnel died when argo-up, as the pty's session leader, exited: the wrapper shell is
+	// the leader now, and stays while PTY_RELAY_HOLD passes. Prove the session lives past the relay.
+	const dir = mkdtempSync(join(tmpdir(), "argo-hold-"));
+	try {
+		const flag = join(dir, "flag");
+		const log = join(dir, "ticks");
+		writeFileSync(flag, "");
+		const proc = spawn("python3", ["-c", PTY_RELAY, "sh", "-c", "echo started; exit 7"], {
+			stdio: ["pipe", "pipe", "pipe"],
+			env: { ...process.env, PTY_RELAY_HOLD: `echo tick >> '${log}' && [ -e '${flag}' ]`, PTY_RELAY_HOLD_S: "0.1" },
+		});
+		let out = "";
+		proc.stdout.on("data", (d) => (out += d.toString()));
+		const code = await new Promise((r) => proc.on("close", r));
+		assert.equal(code, 7, "the command's exit code, read from the marker line");
+		assert.match(out, /started/);
+		assert.doesNotMatch(out, /__PTY_RELAY_EXIT__/, "the marker never reaches the caller");
+		const ticks = () => { try { return readFileSync(log, "utf8").split("\n").filter(Boolean).length; } catch { return 0; } };
+		const before = ticks();
+		await new Promise((r) => setTimeout(r, 400));
+		assert.ok(ticks() > before, "the wrapper is still polling after the relay returned");
+		rmSync(flag);
+		await new Promise((r) => setTimeout(r, 400));
+		const settled = ticks();
+		await new Promise((r) => setTimeout(r, 400));
+		assert.equal(ticks(), settled, "once the hold test fails the wrapper exits");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
