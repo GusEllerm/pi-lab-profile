@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 751a4ed0b5e1da07fbb2d46655487ae3aee248d9
+source-hash: 926414d060f49c46f3d85d618c1e892d91541b71
 documented: 2026-09-20
 ---
 
@@ -137,7 +137,8 @@ outside a command handler would not be. And a URL that lost `/resource_server/` 
 ### Argo (23 Sept 2026)
 
 Providers named `argo`/`argo-openai` get their own probe (`probeArgo`: `/health`, then the catalogue
-size — never opens anything) and a deliberate badge: `shortName` is `⚡ argo`, the slot state is at
+size, printed as `55 ids · 38 models · metered` — catalogue entries, then the count [[argo]] reports
+on `argo:health` after folding aliases — never opens anything) and a deliberate badge: `shortName` is `⚡ argo`, the slot state is at
 least `warn` while up and `error` when [[argo]] reports the tunnel down over `argo:health`. The
 details row says why: metered, and prompts leave through a proxy that may log them.
 

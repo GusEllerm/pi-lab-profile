@@ -113,9 +113,9 @@ const secs = (ms: number) => {
 };
 
 // ── usage: summed once per assistant message, not on every render ─────────────────────────────
-type Usage = { prompt: number; cacheRead: number; output: number; calls: number; cost: number };
+type Usage = { prompt: number; cacheRead: number; output: number; calls: number; cost: number; estimated: boolean };
 function sumUsage(ctx: ExtensionContext): Usage {
-	const u: Usage = { prompt: 0, cacheRead: 0, output: 0, calls: 0, cost: 0 };
+	const u: Usage = { prompt: 0, cacheRead: 0, output: 0, calls: 0, cost: 0, estimated: false };
 	for (const e of ctx.sessionManager.getBranch()) {
 		const m = (e as { type: string; message?: any }).message;
 		if (e.type !== "message" || m?.role !== "assistant" || !m.usage) continue;
@@ -124,6 +124,8 @@ function sumUsage(ctx: ExtensionContext): Usage {
 		u.cacheRead += m.usage.cacheRead ?? 0;
 		u.output += m.usage.output ?? 0;
 		u.cost += m.usage.cost?.total ?? 0;
+		// argo.ts fills in prompt tokens the proxy streamed as zero, and says so
+		if (m.usage.estimated) u.estimated = true;
 	}
 	return u;
 }
@@ -313,7 +315,7 @@ export default function (pi: ExtensionAPI): void {
 	const slots = new Map<string, Slot>();
 	let ctxRef: ExtensionContext | undefined;
 	let tuiRef: TUI | undefined;
-	let usage: Usage = { prompt: 0, cacheRead: 0, output: 0, calls: 0, cost: 0 };
+	let usage: Usage = { prompt: 0, cacheRead: 0, output: 0, calls: 0, cost: 0, estimated: false };
 	let statusesRef: ReadonlyMap<string, string> = new Map();
 	const speed = new SpeedMeter();
 	const trail = new ContextTrail();
@@ -386,7 +388,7 @@ export default function (pi: ExtensionAPI): void {
 				"USAGE",
 				[
 					`context ${u?.tokens != null ? `${fmt(u.tokens)} tokens · ` : ""}${u?.percent != null ? `${u.percent.toFixed(1)}%` : "?"} of ${fmt(u?.contextWindow ?? 0)}`,
-					`${fmt(usage.prompt)} prompt tokens over ${usage.calls} call${usage.calls === 1 ? "" : "s"} · cache ${usage.prompt ? ((100 * usage.cacheRead) / usage.prompt).toFixed(0) : 0}% · output ${fmt(usage.output)}${usage.cost > 0 ? ` · $${usage.cost.toFixed(4)}` : ""}`,
+					`${fmt(usage.prompt)} prompt tokens over ${usage.calls} call${usage.calls === 1 ? "" : "s"} · cache ${usage.prompt ? ((100 * usage.cacheRead) / usage.prompt).toFixed(0) : 0}% · output ${fmt(usage.output)}${usage.cost > 0 ? ` · ${usage.estimated ? "≈" : ""}$${usage.cost.toFixed(4)}` : ""}`,
 					(() => {
 						const s2 = speed.read();
 						const parts = [
@@ -818,8 +820,10 @@ export default function (pi: ExtensionAPI): void {
 			const agentTokens = slots.get("agents")?.tokens ?? 0;
 			const sessionTokens = usage.prompt + usage.output;
 			section("USAGE", undefined, [
-				`in ${fmt(usage.prompt)} · out ${fmt(usage.output)}`,
+				`in ${usage.estimated ? "≈" : ""}${fmt(usage.prompt)} · out ${fmt(usage.output)}`,
 				t.fg("dim", `${cache}${fmt(usage.calls)} call${usage.calls === 1 ? "" : "s"}`),
+				// dollars only where a model carries a rate: the lab's own endpoints are free, Argo is not
+				...(usage.cost > 0 ? [t.fg("dim", `${usage.estimated ? "≈ " : ""}$${usage.cost.toFixed(usage.cost < 1 ? 4 : 2)}${usage.estimated ? " est." : ""}`)] : []),
 				...(sp && sp.text !== "…" ? [sp.live ? t.fg("accent", sp.text) : t.fg("dim", sp.text)] : []),
 			]);
 			section("TOTAL", undefined, [
@@ -1392,7 +1396,7 @@ export default function (pi: ExtensionAPI): void {
 					const others = [...statusesRef].filter(([k, v]) => !claimed.has(k) && stripAnsi(v).trim()).length;
 					const cache = usage.prompt ? ` · cache ${((100 * usage.cacheRead) / usage.prompt).toFixed(0)}%` : "";
 					const sp = speedText(speed.read());
-					const usageText = `in ${fmt(usage.prompt)} · out ${fmt(usage.output)}${cache}${sp ? ` · ${sp.text}` : ""}${others ? `  +${others}` : ""}`;
+					const usageText = `in ${usage.estimated ? "≈" : ""}${fmt(usage.prompt)} · out ${fmt(usage.output)}${cache}${sp ? ` · ${sp.text}` : ""}${others ? `  +${others}` : ""}`;
 					const w = [0.22, 0.17, 0.17].map((f) => Math.floor(width * f));
 					const line2 =
 						renderSlot(theme, `⇄ ${ep?.text ?? "endpoint ?"}`, ep?.state, w[0]) +

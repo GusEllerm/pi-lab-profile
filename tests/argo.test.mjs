@@ -8,7 +8,136 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import argo, { PTY_RELAY, canonical, dedupe, family, looksLikePrompt, modelDef, order, providers, readArgoConfig } from "../extensions/argo.ts";
+import argo, { BUNDLED_PRICING, PTY_RELAY, canonical, dedupe, estimateTokens, family, findOnPath, loadPricing, looksLikePrompt, modelDef, order, parsePricing, providers, ratesFor, readArgoConfig, repairUsage, sessionSpend } from "../extensions/argo.ts";
+
+test("rates: argo-dash's canon rules, promos by date, cache as multiples of input", () => {
+	const p = BUNDLED_PRICING;
+	assert.deepEqual(ratesFor("claude-sonnet-4-6", p), { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+	assert.deepEqual(ratesFor("claude-4.6-sonnet", p), ratesFor("claude-sonnet-4-6", p), "the alias order folds");
+	assert.deepEqual(ratesFor("claude-haiku-4-5-20251001", p), ratesFor("claude-haiku-4-5", p), "a dated suffix is dropped");
+	assert.equal(ratesFor("gpt-4o", p), undefined, "no rate, no dollars — as on the dash");
+	assert.equal(ratesFor("claude-sonnet-5", p, new Date("2026-08-01")).input, 2, "promo while it lasts");
+	assert.equal(ratesFor("claude-sonnet-5", p, new Date("2026-09-01")).input, 3, "list rate after the last day");
+	assert.deepEqual(modelDef("claude-sonnet-4-6", p).cost, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+	assert.deepEqual(modelDef("claude-sonnet-4-6").cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, "without a table nothing is priced");
+	assert.equal(providers(["claude-opus-5", "gpt-5.5"], { user: "u", port: 1 }, p).argo.models[0].cost.output, 25);
+});
+
+test("parsePricing rejects a half-formed dump rather than applying part of it", () => {
+	assert.equal(parsePricing("not json"), undefined);
+	assert.equal(parsePricing(JSON.stringify({ rates: { a: [1] }, cache: { read: 0.1, w5m: 1.25 }, verified: "x" })), undefined, "a rate needs both halves");
+	assert.equal(parsePricing(JSON.stringify({ rates: { a: [1, 2] }, cache: { read: 0.1 }, verified: "x" })), undefined, "cache multipliers are required");
+	const ok = parsePricing(JSON.stringify({ rates: { "claude-x": [1, 2] }, promos: { "claude-x": [0.5, 1, "2030-01-01"] }, cache: { read: 0.1, w5m: 1.25, w1h: 2 }, verified: "2026-01-01" }));
+	assert.equal(ok.source, "argo-dash");
+	assert.deepEqual(ratesFor("claude-x", ok), { input: 0.5, output: 1, cacheRead: 0.05, cacheWrite: 0.625 });
+});
+
+test("loadPricing imports the installed argo-dash, and falls back to the bundled table", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "argo-dash-"));
+	try {
+		const fake = join(dir, "argo-dash");
+		writeFileSync(fake, [
+			"#!/usr/bin/env python3",
+			"import sys",
+			"PRICING_VERIFIED = '2030-01-01'",
+			"PRICING = {'claude-opus-9': (7.0, 35.0)}",
+			"PROMOS = {}",
+			"CACHE_MULTIPLIER = {'w5m': 1.25, 'w1h': 2.0, 'read': 0.1}",
+			"if __name__ == '__main__': sys.exit(99)",
+		].join("\n"));
+		assert.equal(findOnPath("argo-dash", `${dir}:/nonexistent`), fake);
+		assert.equal(findOnPath("argo-dash", "/nonexistent"), undefined);
+		const live = await loadPricing(fake);
+		assert.equal(live.source, "argo-dash");
+		assert.equal(live.verified, "2030-01-01");
+		assert.deepEqual(ratesFor("claude-opus-9", live), { input: 7, output: 35, cacheRead: 0.7, cacheWrite: 8.75 });
+		writeFileSync(fake, "PRICING = 'broken'\n");
+		assert.equal((await loadPricing(fake)).source, "bundled", "a dash whose table does not parse is ignored whole");
+		writeFileSync(fake, "raise SystemExit(3)\n");
+		assert.equal((await loadPricing(fake)).source, "bundled", "a dash that fails to import is ignored");
+		assert.equal((await loadPricing(join(dir, "missing"))).source, "bundled", "a dash that is not there");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("the prompt estimate is Pi's heuristic: chars/4, images flat, tool calls by their arguments", () => {
+	assert.equal(estimateTokens([]), 0);
+	assert.equal(estimateTokens([{ role: "user", content: "x".repeat(400) }]), 100);
+	assert.equal(estimateTokens([{ role: "user", content: [{ type: "text", text: "x".repeat(40) }, { type: "image", data: "…" }] }]), 10 + 1200);
+	assert.equal(estimateTokens([{ role: "assistant", content: [{ type: "toolCall", name: "bash", arguments: { command: "ls" } }] }]), Math.ceil((JSON.stringify({ command: "ls" }).length + 20) / 4));
+	assert.equal(estimateTokens([{ role: "toolResult", content: [{ type: "text", text: "y".repeat(80) }] }]), 20);
+	assert.equal(estimateTokens([], "s".repeat(4000)), 1000, "the system prompt is part of the input");
+});
+
+test("repairUsage fills a zeroed prompt count, prices it, marks it, and leaves real counts alone", () => {
+	const rates = ratesFor("claude-sonnet-4-6", BUNDLED_PRICING);
+	const zeroed = { input: 0, output: 200, cacheRead: 0, cacheWrite: 0, totalTokens: 200, cost: { input: 0, output: 0.003, cacheRead: 0, cacheWrite: 0, total: 0.003 } };
+	const fixed = repairUsage(zeroed, 50_000, rates);
+	assert.equal(fixed.input, 50_000);
+	assert.equal(fixed.totalTokens, 50_200, "the context gauge reads input + output");
+	assert.equal(fixed.estimated, true);
+	assert.equal(fixed.cost.input, 0.15, "50k tokens at $3/M");
+	assert.equal(fixed.cost.total, 0.153);
+	assert.equal(fixed.cost.output, 0.003, "the output half was exact and stays");
+	assert.equal(repairUsage({ input: 12, output: 4, cacheRead: 0, cacheWrite: 0 }, 999, rates), undefined, "a reported prompt count is not overwritten");
+	assert.equal(repairUsage({ input: 0, output: 4, cacheRead: 3000, cacheWrite: 0 }, 999, rates), undefined, "cache reads count as reported");
+	assert.equal(repairUsage(undefined, 1, rates), undefined);
+	const unpriced = repairUsage({ input: 0, output: 4 }, 100, undefined);
+	assert.equal(unpriced.input, 100, "no rate still fixes the token count");
+	assert.equal(unpriced.cost.total, 0);
+});
+
+test("sessionSpend sums Argo turns only and reports what it could not price", () => {
+	const msg = (provider, usage) => ({ type: "message", message: { role: "assistant", provider, usage } });
+	const s = sessionSpend([
+		msg("argo", { cost: { total: 0.1 }, estimated: true }),
+		msg("argo", { cost: { total: 0.2 } }),
+		msg("argo-openai", { cost: { total: 0 } }),
+		msg("globus", { cost: { total: 5 } }),
+		{ type: "message", message: { role: "user" } },
+	]);
+	assert.equal(s.turns, 3);
+	assert.ok(Math.abs(s.cost - 0.3) < 1e-9);
+	assert.equal(s.estimated, true);
+	assert.equal(s.unpriced, 1);
+	assert.equal(sessionSpend([]).turns, 0);
+});
+
+test("message_end: an Argo Claude turn with zeroed input comes back estimated; other providers pass through", async () => {
+	const handlers = new Map();
+	const pi = {
+		registerProvider: () => {},
+		unregisterProvider: () => {},
+		registerCommand: () => {},
+		on: (e, h) => { handlers.set(e, h); return () => {}; },
+		events: { on: () => () => {}, emit: () => {} },
+	};
+	const savedHome = process.env.HOME;
+	process.env.HOME = mkdtempSync(join(tmpdir(), "argo-nohome-"));
+	try {
+		await argo(pi);
+		const hook = handlers.get("message_end");
+		assert.ok(hook, "argo.ts hooks message_end");
+		const ctx = {
+			sessionManager: { getBranch: () => [{ type: "message", message: { role: "user", content: "q".repeat(4000), timestamp: 1 } }] },
+			getSystemPrompt: () => "s".repeat(4000),
+		};
+		const turn = { role: "assistant", provider: "argo", model: "claude-sonnet-4-6", timestamp: 2, stopReason: "stop", usage: { input: 0, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { input: 0, output: 0.00015, cacheRead: 0, cacheWrite: 0, total: 0.00015 } } };
+		const out = hook({ message: turn }, ctx);
+		assert.equal(out.message.usage.input, 2000, "prompt (1000) plus system (1000) tokens");
+		assert.equal(out.message.usage.estimated, true);
+		assert.ok(out.message.usage.cost.total > 0.005, "priced at sonnet's input rate: 2000 tokens is $0.006");
+		assert.equal(hook({ message: { ...turn, provider: "globus" } }, ctx), undefined, "not Argo, not touched");
+		assert.equal(hook({ message: { ...turn, provider: "argo-openai" } }, ctx), undefined, "the OpenAI path reports usage itself");
+		assert.equal(hook({ message: { ...turn, stopReason: "error" } }, ctx), undefined);
+		assert.equal(hook({ message: { ...turn, usage: { ...turn.usage, input: 900 } } }, ctx), undefined, "a real count is kept");
+		handlers.get("session_shutdown")?.();
+	} finally {
+		rmSync(process.env.HOME, { recursive: true, force: true });
+		process.env.HOME = savedHome;
+	}
+});
 
 test("canonical ids: argo-claude's rules", () => {
 	assert.equal(canonical("argo:claude-opus-4.8"), "claude-opus-4-8");

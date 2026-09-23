@@ -202,14 +202,15 @@ async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyMod
 }
 
 /** Argo: is the tunnel answering, and how much does it serve. Never opens anything. */
-async function probeArgo(models: AnyModel[]): Promise<Row[]> {
+async function probeArgo(models: AnyModel[], registered: number): Promise<Row[]> {
 	const base = models[0].baseUrl.replace(/\/v1\/?$/, "").replace(/\/$/, "");
 	try {
 		const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
 		if (!res.ok) throw new Error(`HTTP ${res.status}`);
 		const served = (await getJson(`${base}/v1/models`)) as { data?: { id: string }[] };
+		// the catalogue lists aliases; argo.ts folds them, so both counts are shown
 		const n = served.data?.length ?? 0;
-		return models.map((m) => ({ model: m, label: `● up      ${m.id}  (${n} ids served · metered)` }));
+		return models.map((m) => ({ model: m, label: `● up      ${m.id}  (${n} ids · ${registered} models · metered)` }));
 	} catch (e) {
 		const why = e instanceof Error ? e.message : String(e);
 		return models.map((m) => ({ model: m, label: `? down    ${m.id}  (tunnel closed — /argo on; ${why})` }));
@@ -222,8 +223,11 @@ export default function (pi: ExtensionAPI): void {
 	let lastReply: "ok" | "error" | "plain" = "plain";
 	// argo.ts says whether the tunnel answers; the row must not claim a route that argo-down closed.
 	let argoUp = false;
+	let argoModels = 0;
 	pi.events.on("argo:health", (data) => {
-		argoUp = Boolean((data as { up?: boolean } | undefined)?.up);
+		const d = data as { up?: boolean; models?: number } | undefined;
+		argoUp = Boolean(d?.up);
+		argoModels = d?.models ?? argoModels;
 		publishTab();
 	});
 	const shortName = (model: AnyModel): string => {
@@ -251,7 +255,7 @@ export default function (pi: ExtensionAPI): void {
 				endpointLabel(ctx, model),
 				`${model.baseUrl} · ${lastReply === "ok" ? "last reply ok" : lastReply === "error" ? "last reply failed" : "no reply yet"}`,
 				...(isArgo(model)
-					? [argoUp ? "metered · prompts leave via the Argo gateway · /argo" : "tunnel is down — /argo on"]
+					? [argoUp ? "metered · prompts leave via the Argo gateway · /argo spend for the dash's figures" : "tunnel is down — /argo on"]
 					: []),
 			],
 		});
@@ -318,7 +322,7 @@ export default function (pi: ExtensionAPI): void {
 				sections = await Promise.all(
 					[...byProvider].map(async ([provider, models]) => {
 						const rows = isArgo(models[0])
-							? await probeArgo(models)
+							? await probeArgo(models, argoModels)
 							: hostOf(models[0].baseUrl) === ALCF_HOST
 								? await probeAlcf(ctx, provider, models)
 								: await probeGlobus(models);

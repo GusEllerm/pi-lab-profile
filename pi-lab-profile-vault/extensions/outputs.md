@@ -1,6 +1,6 @@
 ---
 source: extensions/outputs.ts
-source-hash: 0177ac4e3c95df6a4240974ca591d4c8f94688ea
+source-hash: d2a53362c6e874c40db4cfa3be7a0591cbd6644a
 documented: 2026-09-20
 ---
 
@@ -136,7 +136,8 @@ backspace, and any single printable ASCII character as a filter keystroke. `hand
 
 A plain bordered overlay that renders **all** its lines at once — there is no scrolling. That is
 only safe because `show()` sends anything over `OPEN_IN_EDITOR_LINES` to the editor instead.
-Escape, enter or `q` closes it.
+Escape, enter or `q` closes it. Exported since 23 Sept 2026: [[argo]] pages `/argo spend`
+through it (argo-dash's report is ~40 lines, under the limit).
 
 ### `paintDiff()`
 
@@ -145,8 +146,9 @@ load-bearing: `^\+\+\+|^---` is tested **first** so file headers come out `dim` 
 mistaken for added/removed lines, then `@@` → `accent`, `+` → `toolDiffAdded`, `-` →
 `toolDiffRemoved`, `#` → `dim` (this is the `# <path>` header `collect()` prepends to a diff body),
 and everything else → `toolDiffContext`. Covered by `tests/paint-diff.test.mjs`, which extracts the
-function body out of the source between `function paintDiff` and `class Pager`, strips the TS
-annotations and evals it — so **renaming `paintDiff` or moving `class Pager` breaks that test**.
+function body out of the source between `function paintDiff` and the `/** A bordered read-only
+page` doc comment above `Pager`, strips the TS annotations and evals it — so **renaming
+`paintDiff` or moving or re-commenting `Pager` breaks that test** (exporting the class did, once).
 It was written this way because driving a model into making a real edit took ~90s per run.
 
 ### Editor handoff and the temp-file lifecycle

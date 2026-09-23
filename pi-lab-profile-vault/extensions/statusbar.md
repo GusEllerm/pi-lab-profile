@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 28ec1962540d23fc2891e8efd45d16c023194fbb
+source-hash: 76dd9f82db44926f937ac72d6cc65277af764497
 documented: 2026-09-20
 ---
 
@@ -86,6 +86,11 @@ them.
 empty and `USAGE` truncated): `CONTEXT` leads, because it is the only section with a deadline
 attached; `AGENTS` follows and expands only while agents run; the static `MODEL` and `ENDPOINT` sit
 below; then `ROUND` (only once a round has started), `USAGE`, `TOTAL`, `OTHER`.
+
+`USAGE` adds a dim dollars line only when the session's summed `usage.cost.total` is above zero —
+the lab's own endpoints carry no rate, Argo does — and prefixes `≈` (and `est.`) when any assistant
+message carries `usage.estimated`, which [[argo]] sets after standing in for a prompt count the
+proxy streamed as zero. The footer's `in` figure gets the same `≈`.
 
 `CONTEXT` reports **remaining** rather than just the percentage (`92.1% · 19k left`), and carries a
 trajectory: `ContextTrail` keeps a minute of once-a-second samples and yields `rate()` in tokens per

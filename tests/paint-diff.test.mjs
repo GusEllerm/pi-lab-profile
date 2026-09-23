@@ -17,7 +17,7 @@ const slice = (start, end) => {
   return src.slice(a, b);
 };
 const signature = "function paintDiff(line: string, t: Theme): string";
-const sliced = slice("function paintDiff", "class Pager");
+const sliced = slice("function paintDiff", "/** A bordered read-only page");
 assert.ok(sliced.includes(signature), `paintDiff's signature changed; update this test's strip (looked for: ${signature})`);
 const body = sliced.replace(signature, "function paintDiff(line, t)");
 const paintDiff = new Function(`${body}; return paintDiff;`)();

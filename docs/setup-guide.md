@@ -679,8 +679,8 @@ git clone https://github.com/GusEllerm/argo-tools.git ~/Projects/argo-tools && c
 ```
 
 `extensions/argo.ts` reads `~/.config/argo-tools/config` and, whenever the tunnel is up, registers
-what Argo serves: `argo/<claude-…>` over the Anthropic messages API — thinking levels and cache
-accounting work through the proxy — and `argo-openai/<gpt-…|gemini-…>` over chat completions.
+what Argo serves: `argo/<claude-…>` over the Anthropic messages API — thinking levels work through
+the proxy — and `argo-openai/<gpt-…|gemini-…>` over chat completions.
 Aliases are folded (`claude-5-opus` and `claude-opus-5` are one model), `[test]`, embedding and
 reranker models are dropped, and frontier models come first in `/model`.
 
@@ -689,10 +689,22 @@ Argo until you say so, and the profile honours that: it never runs `argo-up` by 
 
 | command | |
 |---|---|
-| `/argo` | status: user, port, up or down, models registered |
+| `/argo` | status: user, port, up or down, models registered, and this session's spend in dollars |
 | `/argo on` | runs `argo-up` in a pseudo-terminal the profile owns; its progress lines appear in the chat, and the Duo prompt becomes an input dialog — type `1`, approve the push on your phone. Non-interactive while the bastion control channel is alive (4 h after a Duo) |
 | `/argo down` | runs `argo-down`: the local port closes, the models unregister, and the column says `⚡ argo off` |
+| `/argo spend` | argo-dash's usage report in a page: `argo-dash --once` (the proxy log, exact input and cache counts, about a second) while the tunnel is up, `argo-dash --totals` (the local ledger) otherwise |
 | `/argo reload` | re-read the catalogue and re-register (after bringing the tunnel up in a terminal) |
+
+**Spend.** Claude models register with argo-dash's price table — Anthropic's public list rates, the
+same "list $" the dash prints — read from the installed `argo-dash` at startup (a bundled copy
+stands in when it is not on PATH), so the two tools put the same dollar on the same tokens. The
+column's `USAGE` row then shows the session's cost and `/argo` says how it was reached. One caveat
+you should know: **argo-proxy streams Claude's prompt tokens as zero** (only a non-streaming reply
+carries them, and Pi streams), so Pi fills in its own estimate — chars ÷ 4, the same heuristic it
+uses before a first reply — priced at the input rate, and marks the figure `≈`. Output tokens are
+exact. Without that fill-in the context gauge would sit at 0% and auto-compaction would never
+fire on Argo. For exact input and cache counts use `/argo spend`; the dash gets them from the
+proxy log. GPT and Gemini turns show no dollars, as on the dash, which has no rates for them.
 
 While the session model is on Argo the column's `ENDPOINT` row reads **`⚡ argo`** in a warning colour,
 and a 30-second health check flips it to `⚡ argo off` the moment the tunnel goes away. That badge is
@@ -705,8 +717,10 @@ deliberate, for two reasons:
   110 MB in a day. Know what that trade buys before making it, and rotate the log if you leave it on.
 
 **Check:** with the tunnel up, `pi --model argo/claude-sonnet-4-6 -p "Reply with just: ok"` prints
-`ok`, and so does `--model argo-openai/gpt-4o`. `/endpoints` lists Argo as `● up … (N ids served ·
-metered)`; after `/argo down` it lists `? down … (tunnel closed — /argo on)`.
+`ok`, and so does `--model argo-openai/gpt-4o`. `/endpoints` lists Argo as `● up … (55 ids · 38
+models · metered)` — the catalogue's ids, then what is left after aliases fold; after `/argo down`
+it lists `? down … (tunnel closed — /argo on)`. After one Argo turn the column's `USAGE` row reads
+something like `in ≈2.6k · out 4` over `≈ $0.0078 est.`, and `/argo spend` opens the dash's table.
 
 ## 15. Acceptance tests for Part 2
 

@@ -40,7 +40,7 @@ regular mode draws into the terminal's own scrollback and has no layout root to 
 | `/images` | keep only the newest N images in context |
 | `/mcp` | MCP servers started for this session and their tools — Pi has no MCP of its own; this profile adds it |
 | `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
-| `/argo` · `/argo on` · `/argo down` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down` |
+| `/argo` · `/argo on` · `/argo down` · `/argo spend` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status and this session's spend; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down`; argo-dash's usage report |
 
 ### The review panel
 
@@ -84,13 +84,20 @@ Run your own before trusting any model in the critic seat.
 
 With [argo-tools](https://github.com/GusEllerm/argo-tools) set up, `extensions/argo.ts` registers what
 the Argo gateway serves as two providers: `argo/<claude-…>` over the Anthropic API (thinking levels
-and cache accounting survive the proxy) and `argo-openai/<gpt-…|gemini-…>` over chat completions —
-de-duplicated, test and embedding models dropped, frontier models first. The tunnel is never
-opened on its own: `/argo on` runs `argo-up` inside a pseudo-terminal and turns the Duo prompt
-into a dialog in the chat (type `1`, approve the push); `/argo down` runs `argo-down`. While the
-session model is on Argo the column's `ENDPOINT` row reads `⚡ argo` in a warning colour, because
-Argo is metered and argo-proxy may log every request body on a shared node — see the setup guide.
-`/round` does not use Argo by default for the same reason.
+survive the proxy) and `argo-openai/<gpt-…|gemini-…>` over chat completions — de-duplicated, test
+and embedding models dropped, frontier models first. The tunnel is never opened on its own:
+`/argo on` runs `argo-up` inside a pseudo-terminal and turns the Duo prompt into a dialog in the
+chat (type `1`, approve the push); `/argo down` runs `argo-down`. While the session model is on
+Argo the column's `ENDPOINT` row reads `⚡ argo` in a warning colour, because Argo is metered and
+argo-proxy may log every request body on a shared node — see the setup guide. `/round` does not
+use Argo by default for the same reason.
+
+Spend is priced the way argo-dash prices it: Claude models carry the dash's list-rate table (read
+from the installed `argo-dash`, so a re-verification there reaches Pi), the column's `USAGE` row
+shows the session's dollars, `/argo` puts them in words and `/argo spend` opens the dash's own
+report (`--once` from the proxy log while the tunnel is up, the local ledger otherwise). The
+figure is marked `≈` because argo-proxy streams Claude's prompt tokens as zero; Pi's estimate
+stands in, which also keeps the context gauge and auto-compaction honest on Argo.
 
 ### MCP servers as tools
 

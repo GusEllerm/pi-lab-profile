@@ -359,7 +359,8 @@ function paintDiff(line: string, t: Theme): string {
 	return t.fg("toolDiffContext", line);
 }
 
-class Pager implements Component {
+/** A bordered read-only page; argo.ts borrows it for /argo spend. */
+export class Pager implements Component {
 	private title: string;
 	private lines: string[];
 	private theme: Theme;
