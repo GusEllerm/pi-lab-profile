@@ -295,7 +295,9 @@ export default function (pi: ExtensionAPI): void {
 			const ids = new Set(customProviderIds());
 			const byProvider = new Map<string, AnyModel[]>();
 			for (const m of ctx.modelRegistry.getAll() as AnyModel[]) {
-				if (!ids.has(m.provider)) continue;
+				// models.json providers, plus the ones argo.ts registers at runtime -- they are not
+				// in that file, and /endpoints silently omitted them until this line existed
+				if (!ids.has(m.provider) && !isArgo(m)) continue;
 				byProvider.set(m.provider, [...(byProvider.get(m.provider) ?? []), m]);
 			}
 			if (byProvider.size === 0) return ctx.ui.notify(`No providers found in ${MODELS_JSON}`, "warning");

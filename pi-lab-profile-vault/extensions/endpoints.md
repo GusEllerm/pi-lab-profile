@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 975da8918cef3c4936511fdd8cbfbfc1bfd3ae0c
+source-hash: 751a4ed0b5e1da07fbb2d46655487ae3aee248d9
 documented: 2026-09-20
 ---
 
