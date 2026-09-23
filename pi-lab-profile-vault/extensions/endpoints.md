@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 25d34a0a7783dcc994f37202390da96ac4fdd70f
+source-hash: 9e3ec792fb1b20ba6af653d67d8df9f10c6394e1
 documented: 2026-09-20
 ---
 
@@ -79,7 +79,7 @@ Per-fetch timeout is `PROBE_TIMEOUT_MS` (8 s) via `AbortSignal.timeout`.
 | `statusbar:slot` | emitted | `{ id: "endpoint", text: shortName, state: "ok" \| "error" \| "plain", statusKey: "endpoint", details: () => string[] }` | The endpoint cell in the column; `details()` gives the full label and `baseUrl` to the dashboard |
 | `statusbar:endpoint-labels` | emitted | `{ [provider]: shortLabel }` | One short name per provider so every other surface agrees; statusbar falls back to the registry display name for providers not covered |
 | `statusbar:ready` | consumed | — | The bar re-emits at session start; republish both of the above regardless of load order |
-| `argo:health` | consumed | `{ up, port, models }` | From [[argo]]: flips the ENDPOINT row to `⚡ argo off`, and supplies the registered-model count for the Argo probe's `55 ids · 38 models` |
+| `argo:health` | consumed | `{ up, port, models }` | From [[argo]]: flips the ENDPOINT row to `⚡ argo down`, and supplies the registered-model count for the Argo probe's `55 ids · 38 models` |
 | `session_start` | consumed (`pi.on`) | `ctx` | Cache `ctxRef`, set the native status, publish slot and labels |
 | `model_select` | consumed (`pi.on`) | `{ model }` | Re-label and reset `lastReply` to `"plain"` — the new endpoint has not answered yet |
 | `message_end` | consumed (`pi.on`) | `{ message }` | Assistant messages only: an `errorMessage` or `stopReason === "error"` flips the slot to ✗, anything else to ✓ |

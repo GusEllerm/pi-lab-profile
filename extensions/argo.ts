@@ -22,7 +22,7 @@
  *
  * The tunnel is deliberately manual. argo-up needs a Duo push the first time (a real prompt, read
  * from the controlling terminal), and argo-down exists so that nothing on this machine can reach
- * Argo until you say so. This extension never brings the tunnel up on its own. /argo on runs
+ * Argo until you say so. This extension never brings the tunnel up on its own. /argo up runs
  * argo-up inside a pseudo-terminal it owns, relays its output into the chat, and turns the Duo
  * prompt into a Pi input dialog -- you type 1, approve the push on your phone, and the models
  * register when the chain is up. /argo down runs argo-down and unregisters them.
@@ -656,7 +656,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	}
 
 	pi.registerCommand("argo", {
-		description: "Argo gateway: /argo · /argo on (runs argo-up, Duo prompt in chat) · /argo down · /argo spend · /argo reload",
+		description: "Argo gateway: /argo · /argo up (runs argo-up, Duo prompt in chat) · /argo down · /argo spend · /argo reload",
 		handler: async (args, ctx) => {
 			if (dead) return;
 			const verb = args.trim().toLowerCase();
@@ -675,7 +675,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			setUp(ok);
 			const lines = [
 				cfg ? `${cfg.user} → localhost:${cfg.port} (${cfg.file})` : "not configured — run argo-setup in a terminal",
-				ok ? `up · ${registered ? `${models.length} models registered` : "not registered — /argo reload"}` : "down — /argo on runs argo-up (Duo prompt appears here)",
+				ok ? `up · ${registered ? `${models.length} models registered` : "not registered — /argo reload"}` : "down — /argo up runs argo-up (Duo prompt appears here)",
 				...(lastError ? [`last error: ${lastError}`] : []),
 				spendLine(ctx),
 				"/argo spend shows argo-dash's report · metered, and argo-proxy may log request bodies on the CELS node",

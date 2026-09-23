@@ -1,6 +1,6 @@
 ---
 source: extensions/argo.ts
-source-hash: d6d537349964a9994764a588d57b18dc443d5990
+source-hash: 60889e2ba262ae4c3ca3af0b1c0553f45fb84ecd
 documented: 2026-09-23
 ---
 
@@ -9,7 +9,7 @@ documented: 2026-09-23
 Argonne's Argo gateway, reached through the user's own [argo-tools](https://github.com/GusEllerm/argo-tools):
 `argo-proxy` on a CELS home node, an SSH tunnel through the Duo bastion, `localhost:44497` speaking
 both the OpenAI and Anthropic APIs, authenticating by ANL username. Built 23 Sept 2026 after the
-decisions in the session: no `/round` use (metered), `/argo on`/`down` in-session with the Duo
+decisions in the session: no `/round` use (metered), `/argo up`/`down` in-session with the Duo
 prompt relayed, de-duplicated real models, a privacy badge.
 
 ## What it owns
@@ -39,21 +39,21 @@ prompt relayed, de-duplicated real models, a privacy badge.
   models twice), `[test]`/embedding/reranker dropped, `PREFERRED` frontier-first ordering. Identical
   to `argo-claude`'s so the two tools name a model the same way. Conservative metadata per family;
   unknown ids still register.
-- **`/argo on`** runs `argo-up` inside a pseudo-terminal (`PTY_RELAY`, Python's `pty`, embedded — no new
+- **`/argo up`** runs `argo-up` inside a pseudo-terminal (`PTY_RELAY`, Python's `pty`, embedded — no new
   dependency), relays its lines into the chat, and turns a prompt (`looksLikePrompt`: an unterminated
   line asking for a passcode/option/password) into `ctx.ui.input`. The answer goes to the child's
   pty. The relay exits when `argo-up` does, not when the pty closes — `ssh -f` leaves a master
   holding it open on purpose. **`/argo down`** runs `argo-down` and unregisters. **`/argo reload`**
   re-reads the catalogue. Startup registers only if `/health` already answers.
 - **`argo:health {up, port, models}`** on the bus, from a 30 s `/health` poll while registered, so
-  [[endpoints]] can flip the `ENDPOINT` row to `⚡ argo off` when `argo-down` closes the port, and
+  [[endpoints]] can flip the `ENDPOINT` row to `⚡ argo down` when `argo-down` closes the port, and
   print `55 ids · 38 models` (catalogue entries, then what survives alias folding) in `/endpoints`.
 
 ## Why it is shaped this way
 
 - **Never opens the tunnel on its own.** `argo-down`'s guarantee — nothing on this machine reaches
   Argo until you act — is the user's security posture, and an extension quietly re-opening it would
-  undo it. `/argo on` is the user acting.
+  undo it. `/argo up` is the user acting.
 - **ssh reads Duo from the controlling terminal**, not stdin, and Pi owns the terminal. Hence the pty.
 - **Metered and logged upstream**, hence the badge and no `/round` default.
 

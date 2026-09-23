@@ -690,8 +690,8 @@ Argo until you say so, and the profile honours that: it never runs `argo-up` by 
 | command | |
 |---|---|
 | `/argo` | status: user, port, up or down, models registered, and this session's spend in dollars |
-| `/argo on` | runs `argo-up` in a pseudo-terminal the profile owns; its progress lines appear in the chat, and the Duo prompt becomes an input dialog — type `1`, approve the push on your phone. Non-interactive while the bastion control channel is alive (4 h after a Duo) |
-| `/argo down` | runs `argo-down`: the local port closes, the models unregister, and the column says `⚡ argo off` |
+| `/argo up` | runs `argo-up` in a pseudo-terminal the profile owns; its progress lines appear in the chat, and the Duo prompt becomes an input dialog — type `1`, approve the push on your phone. Non-interactive while the bastion control channel is alive (4 h after a Duo) |
+| `/argo down` | runs `argo-down`: the local port closes, the models unregister, and the column says `⚡ argo down` |
 | `/argo spend` | argo-dash's usage report in a page: `argo-dash --once` (the proxy log, exact input and cache counts, about a second) while the tunnel is up, `argo-dash --totals` (the local ledger) otherwise |
 | `/argo reload` | re-read the catalogue and re-register (after bringing the tunnel up in a terminal) |
 
@@ -707,7 +707,7 @@ fire on Argo. For exact input and cache counts use `/argo spend`; the dash gets 
 proxy log. GPT and Gemini turns show no dollars, as on the dash, which has no rates for them.
 
 While the session model is on Argo the column's `ENDPOINT` row reads **`⚡ argo`** in a warning colour,
-and a 30-second health check flips it to `⚡ argo off` the moment the tunnel goes away. That badge is
+and a 30-second health check flips it to `⚡ argo down` the moment the tunnel goes away. That badge is
 deliberate, for two reasons:
 
 - **Argo is metered.** `/round` does not use it by default, and nothing here spends on it unasked.
@@ -719,7 +719,7 @@ deliberate, for two reasons:
 **Check:** with the tunnel up, `pi --model argo/claude-sonnet-4-6 -p "Reply with just: ok"` prints
 `ok`, and so does `--model argo-openai/gpt-4o`. `/endpoints` lists Argo as `● up … (55 ids · 38
 models · metered)` — the catalogue's ids, then what is left after aliases fold; after `/argo down`
-it lists `? down … (tunnel closed — /argo on)`. After one Argo turn the column's `USAGE` row reads
+it lists `? down … (tunnel closed — /argo up)`. After one Argo turn the column's `USAGE` row reads
 something like `in ≈2.6k · out 4` over `≈ $0.0078 est.`, and `/argo spend` opens the dash's table.
 
 ## 15. Acceptance tests for Part 2

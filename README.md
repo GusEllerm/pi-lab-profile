@@ -35,7 +35,7 @@ up the moment it is in place. None is required — `/endpoints` shows what is re
 |---|---|---|---|
 | **Globus Labs cluster** (`globus/…`, the default) | a `Host globus1` block in `~/.ssh/config` with your cluster username and key — `ssh globus1 true` must succeed without a prompt (or `GLOBUS_TUNNEL_HOST=<user>@<host>` in the environment) | a cluster account, from the lab | `pi --no-session -p "Reply with just: ok"` opens the tunnel and prints `ok` |
 | **ALCF inference gateway** (`alcf-minerva/…`, `-metis`, `-sophia`) | `uvx alcf-ai auth login` once (browser; the refresh token lasts ~6 months idle). `models.json` runs `alcf-token` per request, so nothing is stored in config | gateway access under your Globus identity, from ALCF | `alcf-token --status`, then `/endpoints` |
-| **Argo** (`argo/claude-…`, `argo-openai/…`, metered) | `git clone https://github.com/GusEllerm/argo-tools && cd argo-tools && ./argo-setup` — writes `~/.config/argo-tools/config`; nothing goes in `models.json`, the models come from the live catalogue | a CELS account with an SSH key and Duo enrolled, and Argo Gateway API authorisation from your division's AIOps representative — without it every reply is "ACCESS DENIED" | `/argo on`, type `1`, approve the push; `/argo` |
+| **Argo** (`argo/claude-…`, `argo-openai/…`, metered) | `git clone https://github.com/GusEllerm/argo-tools && cd argo-tools && ./argo-setup` — writes `~/.config/argo-tools/config`; nothing goes in `models.json`, the models come from the live catalogue | a CELS account with an SSH key and Duo enrolled, and Argo Gateway API authorisation from your division's AIOps representative — without it every reply is "ACCESS DENIED" | `/argo up`, type `1`, approve the push; `/argo` |
 | **hpc-bridge** (compute, not inference) | `uv` on PATH; `mcp.json` runs the server with `uvx` and the Globus login happens in-session on first use | a facility allocation (the Globus Labs cluster needs none beyond your account) | `/mcp`, `/hpc` |
 
 The [setup guide](docs/setup-guide.md) has the long form of each step; §16 covers Argo.
@@ -58,7 +58,7 @@ The [setup guide](docs/setup-guide.md) has the long form of each step; §16 cove
 | `/images` | keep only the newest N images in context |
 | `/mcp` | MCP servers started for this session and their tools — Pi has no MCP of its own; this profile adds it |
 | `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
-| `/argo` · `/argo on` · `/argo down` · `/argo spend` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status and this session's spend; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down`; argo-dash's usage report |
+| `/argo` · `/argo up` · `/argo down` · `/argo spend` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status and this session's spend; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down`; argo-dash's usage report |
 
 ### The review panel
 
@@ -104,7 +104,7 @@ With [argo-tools](https://github.com/GusEllerm/argo-tools) set up, `extensions/a
 the Argo gateway serves as two providers: `argo/<claude-…>` over the Anthropic API (thinking levels
 survive the proxy) and `argo-openai/<gpt-…|gemini-…>` over chat completions — de-duplicated, test
 and embedding models dropped, frontier models first. The tunnel is never opened on its own:
-`/argo on` runs `argo-up` inside a pseudo-terminal and turns the Duo prompt into a dialog in the
+`/argo up` runs `argo-up` inside a pseudo-terminal and turns the Duo prompt into a dialog in the
 chat (type `1`, approve the push); `/argo down` runs `argo-down`. While the session model is on
 Argo the column's `ENDPOINT` row reads `⚡ argo` in a warning colour, because Argo is metered and
 argo-proxy may log every request body on a shared node — see the setup guide. `/round` does not

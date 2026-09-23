@@ -385,7 +385,7 @@ async function probeArgo(models: AnyModel[], registered: number): Promise<Row[]>
 		return models.map((m) => ({ model: m, label: `● up      ${m.id}  (${n} ids · ${registered} models · metered)` }));
 	} catch (e) {
 		const why = e instanceof Error ? e.message : String(e);
-		return models.map((m) => ({ model: m, label: `? down    ${m.id}  (tunnel closed — /argo on; ${why})` }));
+		return models.map((m) => ({ model: m, label: `? down    ${m.id}  (tunnel closed — /argo up; ${why})` }));
 	}
 }
 
@@ -419,7 +419,7 @@ export default function (pi: ExtensionAPI): void {
 		const ctx = ctxRef;
 		pi.events.emit("statusbar:slot", {
 			id: "endpoint",
-			text: isArgo(model) && !argoUp ? "⚡ argo off" : shortName(model),
+			text: isArgo(model) && !argoUp ? "⚡ argo down" : shortName(model),
 			// on Argo the row is always at least a warning: metered, and logged upstream
 			state: isArgo(model) ? (argoUp ? (lastReply === "error" ? "error" : "warn") : "error") : lastReply,
 			statusKey: "endpoint",
@@ -427,7 +427,7 @@ export default function (pi: ExtensionAPI): void {
 				endpointLabel(ctx, model),
 				`${model.baseUrl} · ${lastReply === "ok" ? "last reply ok" : lastReply === "error" ? "last reply failed" : "no reply yet"}`,
 				...(isArgo(model)
-					? [argoUp ? "metered · prompts leave via the Argo gateway · /argo spend for the dash's figures" : "tunnel is down — /argo on"]
+					? [argoUp ? "metered · prompts leave via the Argo gateway · /argo spend for the dash's figures" : "tunnel is down — /argo up"]
 					: []),
 			],
 		});

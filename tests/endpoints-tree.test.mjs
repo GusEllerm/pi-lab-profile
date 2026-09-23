@@ -24,7 +24,7 @@ test("a closed folder summarises what its probe found, in the probe's own words"
 	assert.equal(summarize([{ label: "  probe failed: boom" }]), "1 note");
 	assert.equal(summarize([{ label: "? no auth  gpt-oss-120b  (no token)" }]), "1 no auth", "two-word states survive");
 	assert.equal(summarize([{ label: "? no auth gpt-oss-120b  (no token)" }]), "1 no auth gpt-oss-120b", "…which is why every probe label puts two spaces before the id");
-	assert.equal(summarize([{ label: "? down    m  (tunnel closed — /argo on; x)" }, { label: "? down    n  (…)" }]), "2 down");
+	assert.equal(summarize([{ label: "? down    m  (tunnel closed — /argo up; x)" }, { label: "? down    n  (…)" }]), "2 down");
 });
 
 test("folders in section order; only an open one shows its URL and its models", () => {
