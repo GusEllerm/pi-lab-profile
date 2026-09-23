@@ -16,11 +16,29 @@ your endpoint config — come from one script:
 
 ```bash
 git clone https://github.com/GusEllerm/pi-lab-profile && cd pi-lab-profile
-scripts/install.sh example     # roles + a rounds.json template to edit
+scripts/install.sh lab         # lab members: roles + the globus / ALCF / hpc-bridge config
+scripts/install.sh example     # anyone else: roles + a rounds.json template to edit
 ```
 
 Then add `"tuiMode": "fullscreen"` to `~/.pi/agent/settings.json` — the column needs it, because
-regular mode draws into the terminal's own scrollback and has no layout root to rebuild.
+regular mode draws into the terminal's own scrollback and has no layout root to rebuild — and put
+the `pi()` launcher function from the [setup guide §6](docs/setup-guide.md) in your shell rc; it
+is what opens the globus tunnel before Pi starts.
+
+### Joining the lab: three endpoints, three credentials
+
+`scripts/install.sh lab` gives you the config for every endpoint the lab uses. What it cannot give
+you is access: each endpoint is a credential only you can obtain, and the profile picks each one
+up the moment it is in place. None is required — `/endpoints` shows what is reachable.
+
+| endpoint | what you need | from whom | check |
+|---|---|---|---|
+| **Globus Labs cluster** (`globus/…`, the default) | a `Host globus1` block in `~/.ssh/config` with your cluster username and key — `ssh globus1 true` must succeed without a prompt (or `GLOBUS_TUNNEL_HOST=<user>@<host>` in the environment) | a cluster account, from the lab | `pi --no-session -p "Reply with just: ok"` opens the tunnel and prints `ok` |
+| **ALCF inference gateway** (`alcf-minerva/…`, `-metis`, `-sophia`) | `uvx alcf-ai auth login` once (browser; the refresh token lasts ~6 months idle). `models.json` runs `alcf-token` per request, so nothing is stored in config | gateway access under your Globus identity, from ALCF | `alcf-token --status`, then `/endpoints` |
+| **Argo** (`argo/claude-…`, `argo-openai/…`, metered) | `git clone https://github.com/GusEllerm/argo-tools && cd argo-tools && ./argo-setup` — writes `~/.config/argo-tools/config`; nothing goes in `models.json`, the models come from the live catalogue | a CELS account with an SSH key and Duo enrolled, and Argo Gateway API authorisation from your division's AIOps representative — without it every reply is "ACCESS DENIED" | `/argo on`, type `1`, approve the push; `/argo` |
+| **hpc-bridge** (compute, not inference) | `uv` on PATH; `mcp.json` runs the server with `uvx` and the Globus login happens in-session on first use | a facility allocation (the Globus Labs cluster needs none beyond your account) | `/mcp`, `/hpc` |
+
+The [setup guide](docs/setup-guide.md) has the long form of each step; §16 covers Argo.
 
 ## What you get
 
@@ -33,7 +51,7 @@ regular mode draws into the terminal's own scrollback and has no layout root to 
 | `/round status` · `/round stop` | where a run is, and how to end it |
 | `/fleet` · `/attach` | the subagent list; **Enter attaches** — the transcript becomes that agent's, typing steers it, esc detaches |
 | `/agent-model` | move a *running* subagent to another endpoint mid-run |
-| `/endpoints` | which clusters are live, queued or cold, and which model a provider will really hit |
+| `/endpoints` | one folder per machine, each summarised (`1 live · 2 cold`) and opened with → to list its models; Enter on a model switches to it. Opens at once and fills in as the probes land |
 | `/status` · `/sidebar` | the dashboard, and the column on/off |
 | `/open` | everything substantial from the session — reasoning, bash runs, diffs, writes — in full, in a picker; hand off to `$EDITOR` |
 | `/pin` | the pinned copy of your last message above the transcript, on/off |

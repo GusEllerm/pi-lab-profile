@@ -16,7 +16,8 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { type Component, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const MODELS_JSON = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "models.json");
 const ALCF_HOST = "inference-api.alcf.anl.gov";
@@ -162,7 +163,8 @@ async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyMod
 	const marker = base.indexOf("/resource_server/");
 	// Without the marker the slice below would take the first sixteen characters of the URL as the
 	// gateway and probe nonsense; say what happened instead.
-	if (marker < 0) return models.map((m) => ({ model: m, label: `? unknown ${m.id}  (unrecognised ALCF URL: no /resource_server/ in ${base})` }));
+	// every label is `<glyph> <state>  <id>…` — two spaces before the id — so summarize() can read the state back
+	if (marker < 0) return models.map((m) => ({ model: m, label: `? unknown  ${m.id}  (unrecognised ALCF URL: no /resource_server/ in ${base})` }));
 	const gateway = base.slice(0, marker + "/resource_server/".length);
 	const [cluster, framework] = base.slice(gateway.length).split("/");
 	let token: string | undefined;
@@ -173,7 +175,7 @@ async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyMod
 	}
 	if (!token) {
 		const why = lastTokenError() ?? "no token";
-		return models.map((m) => ({ model: m, label: `? no auth ${m.id}  (${why})` }));
+		return models.map((m) => ({ model: m, label: `? no auth  ${m.id}  (${why})` }));
 	}
 	const auth = { Authorization: `Bearer ${token}` };
 	const [listed, jobs] = await Promise.allSettled([
@@ -199,6 +201,176 @@ async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyMod
 	if (listed.status === "rejected") rows.push({ label: `  list-endpoints failed: ${String(listed.reason?.message ?? listed.reason)}` });
 	if (jobs.status === "rejected") rows.push({ label: `  ${cluster}/jobs failed: ${String(jobs.reason?.message ?? jobs.reason)}` });
 	return rows;
+}
+
+// ── the /endpoints tree: one folder per machine, models inside ───────────────────────────────
+export type Section = { provider: string; label: string; baseUrl: string; rows?: Row[] };
+export type TreeRow =
+	| { kind: "folder"; section: Section; open: boolean }
+	| { kind: "url"; section: Section }
+	| { kind: "model"; section: Section; row: Row };
+
+/**
+ * "3 up · 1 cold" from the rows' leading state words, so a closed folder still says what is
+ * inside. Every probe labels a model `<glyph> <word>  <id>…`; rows without a glyph are notes.
+ */
+export function summarize(rows: Row[] | undefined): string {
+	if (!rows) return "probing…";
+	const counts = new Map<string, number>();
+	for (const r of rows) {
+		const head = r.label.trim().split(/\s{2,}/)[0] ?? "";
+		if (!/^[●○◌?]/.test(head)) continue;
+		const word = head.slice(1).trim();
+		counts.set(word, (counts.get(word) ?? 0) + 1);
+	}
+	if (!counts.size) return rows.length ? `${rows.length} note${rows.length === 1 ? "" : "s"}` : "nothing served";
+	return [...counts].map(([word, n]) => `${n} ${word}`).join(" · ");
+}
+
+/** Folders in section order; an open folder shows its URL line and then its rows. */
+export function treeRows(sections: Section[], open: Set<string>): TreeRow[] {
+	const out: TreeRow[] = [];
+	for (const section of sections) {
+		const isOpen = open.has(section.provider);
+		out.push({ kind: "folder", section, open: isOpen });
+		if (!isOpen) continue;
+		out.push({ kind: "url", section });
+		for (const row of section.rows ?? []) out.push({ kind: "model", section, row });
+	}
+	return out;
+}
+
+/** Which folders are open, kept across /endpoints calls in a session so the view is where you left it. */
+const openFolders = new Set<string>();
+
+class EndpointTree implements Component {
+	private rows: TreeRow[] = [];
+	private cursor = 0;
+	private top = 0;
+	private closed = false;
+
+	private sections: Section[];
+	private active: string;
+	private height: number;
+	private theme: Theme;
+	private close: (chosen?: Row) => void;
+
+	constructor(sections: Section[], active: string, height: number, theme: Theme, close: (chosen?: Row) => void) {
+		this.sections = sections;
+		this.active = active;
+		this.height = height;
+		this.theme = theme;
+		this.close = close;
+		this.rebuild();
+	}
+
+	/** Probes land after the tree is up; the handler calls this as each one resolves. */
+	refresh(): void {
+		this.rebuild(this.rows[this.cursor]);
+	}
+
+	private rebuild(keep?: TreeRow): void {
+		this.rows = treeRows(this.sections, openFolders);
+		const same = (r: TreeRow) =>
+			keep !== undefined && r.kind === keep.kind && r.section === keep.section && (r.kind !== "model" || keep.kind !== "model" || r.row.label === keep.row.label);
+		const idx = this.rows.findIndex(same);
+		this.cursor = idx >= 0 ? idx : Math.max(0, this.rows.findIndex((r) => r.kind !== "url"));
+		this.scrollIntoView();
+	}
+
+	private scrollIntoView(): void {
+		const listRows = this.height - 3;
+		if (this.cursor < this.top) this.top = this.cursor;
+		if (this.cursor >= this.top + listRows) this.top = this.cursor - listRows + 1;
+	}
+
+	private move(step: number): void {
+		for (let i = this.cursor + step; i >= 0 && i < this.rows.length; i += step) {
+			if (this.rows[i].kind === "url") continue;
+			this.cursor = i;
+			return this.scrollIntoView();
+		}
+	}
+
+	private setOpen(section: Section, open: boolean): void {
+		if (open) openFolders.add(section.provider);
+		else openFolders.delete(section.provider);
+		this.rebuild({ kind: "folder", section, open });
+	}
+
+	private done(chosen?: Row): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.close(chosen);
+	}
+
+	render(width: number): string[] {
+		const t = this.theme;
+		const inner = Math.max(30, width - 4);
+		const pad = (s: string, w: number) => {
+			const cell = truncateToWidth(s, w, "…");
+			return cell + " ".repeat(Math.max(0, w - visibleWidth(cell)));
+		};
+		const body: string[] = [];
+		const listRows = this.height - 3;
+		for (let n = 0; n < listRows; n++) {
+			const i = this.top + n;
+			const r = this.rows[i];
+			if (!r) {
+				body.push(pad("", inner));
+				continue;
+			}
+			const selected = i === this.cursor;
+			const arrow = selected ? "→" : " ";
+			if (r.kind === "folder") {
+				const summary = summarize(r.section.rows);
+				const head = `${arrow} ${r.open ? "▾" : "▸"} ${r.section.label}  [${r.section.provider}]`;
+				const left = truncateToWidth(head, Math.max(8, inner - visibleWidth(summary) - 2), "…");
+				const gap = " ".repeat(Math.max(1, inner - visibleWidth(left) - visibleWidth(summary)));
+				body.push((selected ? t.fg("text", left) : t.fg("accent", left)) + gap + t.fg("dim", summary));
+			} else if (r.kind === "url") {
+				body.push(t.fg("dim", pad(`      ${r.section.baseUrl}`, inner)));
+			} else {
+				const key = r.row.model ? `${r.row.model.provider}/${r.row.model.id}` : "";
+				const mark = key && key === this.active ? " ◀ active" : "";
+				const text = `${arrow}     ${r.row.label}${mark}`;
+				body.push(selected ? t.fg("text", pad(text, inner)) : r.row.model ? t.fg("muted", pad(text, inner)) : t.fg("dim", pad(text, inner)));
+			}
+		}
+		const pending = this.sections.filter((s) => !s.rows).length;
+		const title = `Inference endpoints${pending ? ` · probing ${pending}…` : ""}`;
+		const head = truncateToWidth(title, Math.max(8, width - 6), "…");
+		const out = [t.fg("borderAccent", "┌─") + t.fg("accent", ` ${head} `) + t.fg("borderAccent", `${"─".repeat(Math.max(0, width - visibleWidth(head) - 5))}┐`)];
+		for (const line of body) out.push(`${t.fg("borderAccent", "│ ")}${line}${t.fg("borderAccent", " │")}`);
+		out.push(`${t.fg("borderAccent", "│ ")}${pad(t.fg("dim", "↑↓ move · → ← open/close a machine · enter on a model switches to it · esc close"), inner)}${t.fg("borderAccent", " │")}`);
+		out.push(t.fg("borderAccent", `└${"─".repeat(Math.max(0, width - 2))}┘`));
+		return out;
+	}
+
+	handleInput(data: string): void {
+		const r = this.rows[this.cursor];
+		if (matchesKey(data, "escape") || data === "q") return this.done();
+		if (matchesKey(data, "down")) return this.move(1);
+		if (matchesKey(data, "up")) return this.move(-1);
+		if (!r) return;
+		if (matchesKey(data, "right")) {
+			if (r.kind === "folder" && !r.open) this.setOpen(r.section, true);
+			return;
+		}
+		if (matchesKey(data, "left")) {
+			// on a model, ← closes the folder it is in and lands on the folder line
+			if (r.kind === "folder" ? r.open : true) this.setOpen(r.section, false);
+			return;
+		}
+		if (matchesKey(data, "enter") || data === " ") {
+			if (r.kind === "folder") return this.setOpen(r.section, !r.open);
+			if (r.kind === "model" && data !== " ") return this.done(r.row);
+		}
+	}
+	handleMouse() {
+		return { handled: true };
+	}
+	invalidate(): void {}
 }
 
 /** Argo: is the tunnel answering, and how much does it serve. Never opens anything. */
@@ -306,50 +478,43 @@ export default function (pi: ExtensionAPI): void {
 			}
 			if (byProvider.size === 0) return ctx.ui.notify(`No providers found in ${MODELS_JSON}`, "warning");
 
-			// Probing four clusters takes seconds, and until it finishes there is no picker for the
-			// arrow keys to land in — so hold the keyboard, or the agent list quietly takes them.
-			ctx.ui.setStatus("endpoints-probe", ctx.ui.theme.fg("dim", "probing endpoints…"));
-			const keys = (event: string) => {
-				try {
-					pi.events.emit(event, {});
-				} catch {
-					// a /reload during the probe leaves nothing to tell; never take the session down for it
-				}
-			};
-			keys("fleet:keys-hold");
-			let sections: { provider: string; models: AnyModel[]; rows: Row[] }[];
-			try {
-				sections = await Promise.all(
-					[...byProvider].map(async ([provider, models]) => {
-						const rows = isArgo(models[0])
-							? await probeArgo(models, argoModels)
-							: hostOf(models[0].baseUrl) === ALCF_HOST
-								? await probeAlcf(ctx, provider, models)
-								: await probeGlobus(models);
-						return { provider, models, rows };
-					}),
-				);
-			} finally {
-				keys("fleet:keys-release");
-				ctx.ui.setStatus("endpoints-probe", undefined);
-			}
-
-			const options: string[] = [];
-			const pick = new Map<string, Row>();
+			// One folder per machine. The tree opens at once with every folder saying "probing…"
+			// and fills in as each probe lands: probing four clusters takes seconds, and a dialog
+			// that is already up is what keeps the arrow keys from landing in the agent list.
 			const current = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
-			for (const { provider, models, rows } of sections) {
-				options.push(`── ${endpointLabel(ctx, models[0])}   [${provider}]`);
-				options.push(`   ${models[0].baseUrl}`);
-				for (const row of rows) {
-					const mark = row.model && `${row.model.provider}/${row.model.id}` === current ? " ◀ active" : "";
-					const text = `     ${row.label}${mark}`;
-					options.push(text);
-					pick.set(text, row);
-				}
+			const sections: Section[] = [...byProvider].map(([provider, models]) => ({ provider, label: endpointLabel(ctx, models[0]), baseUrl: models[0].baseUrl }));
+			if (ctx.model) openFolders.add(ctx.model.provider);
+			if (openFolders.size === 0 && sections[0]) openFolders.add(sections[0].provider);
+			let tree: EndpointTree | undefined;
+			let render: (() => void) | undefined;
+			for (const [provider, models] of byProvider) {
+				const section = sections.find((s) => s.provider === provider)!;
+				const probe = isArgo(models[0])
+					? probeArgo(models, argoModels)
+					: hostOf(models[0].baseUrl) === ALCF_HOST
+						? probeAlcf(ctx, provider, models)
+						: probeGlobus(models);
+				void probe
+					.catch((e): Row[] => [{ label: `  probe failed: ${e instanceof Error ? e.message : String(e)}` }])
+					.then((rows) => {
+						section.rows = rows;
+						tree?.refresh();
+						render?.();
+					});
 			}
-
-			const choice = await ctx.ui.select("Inference endpoints — Enter on a model switches to it", options);
-			const row = choice ? pick.get(choice) : undefined;
+			const row = await ctx.ui.custom<Row | undefined>((tui, theme, _kb, done) => {
+				const height = Math.max(10, Math.min(30, (tui.terminal?.rows ?? 40) - 10));
+				tree = new EndpointTree(sections, current, height, theme, done);
+				render = () => {
+					try {
+						tui.requestRender();
+					} catch {
+						// the dialog may already be gone; a late probe has nothing to draw into
+					}
+				};
+				return tree;
+			}, {});
+			render = undefined;
 			if (!row) return;
 			if (row.model) {
 				const ok = await pi.setModel(ctx.modelRegistry.find(row.model.provider, row.model.id) ?? (row.model as never));

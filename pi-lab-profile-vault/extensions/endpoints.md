@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 926414d060f49c46f3d85d618c1e892d91541b71
+source-hash: 25d34a0a7783dcc994f37202390da96ac4fdd70f
 documented: 2026-09-20
 ---
 
@@ -79,8 +79,7 @@ Per-fetch timeout is `PROBE_TIMEOUT_MS` (8 s) via `AbortSignal.timeout`.
 | `statusbar:slot` | emitted | `{ id: "endpoint", text: shortName, state: "ok" \| "error" \| "plain", statusKey: "endpoint", details: () => string[] }` | The endpoint cell in the column; `details()` gives the full label and `baseUrl` to the dashboard |
 | `statusbar:endpoint-labels` | emitted | `{ [provider]: shortLabel }` | One short name per provider so every other surface agrees; statusbar falls back to the registry display name for providers not covered |
 | `statusbar:ready` | consumed | — | The bar re-emits at session start; republish both of the above regardless of load order |
-| `fleet:keys-hold` | emitted | `{}` | Reserve the keyboard before the multi-second probe |
-| `fleet:keys-release` | emitted | `{}` | In a `finally`, always paired |
+| `argo:health` | consumed | `{ up, port, models }` | From [[argo]]: flips the ENDPOINT row to `⚡ argo off`, and supplies the registered-model count for the Argo probe's `55 ids · 38 models` |
 | `session_start` | consumed (`pi.on`) | `ctx` | Cache `ctxRef`, set the native status, publish slot and labels |
 | `model_select` | consumed (`pi.on`) | `{ model }` | Re-label and reset `lastReply` to `"plain"` — the new endpoint has not answered yet |
 | `message_end` | consumed (`pi.on`) | `{ message }` | Assistant messages only: an `errorMessage` or `stopReason === "error"` flips the slot to ✗, anything else to ✓ |
@@ -110,10 +109,22 @@ that comes from `jobs`. Only Sophia (`…/sophia/vllm/v1`) matches a real framew
 **Probes — `getJson`, `probeGlobus`, `probeAlcf`.** Each returns `Row[]`; a `Row` carries an optional
 `model` (selectable) or an optional `note` (an id that exists on the cluster but is not configured).
 
-**The picker — the `/endpoints` handler.** Builds a flat `string[]` for `ctx.ui.select` and a
-`Map<string, Row>` keyed by **the exact rendered option text**, including the `◀ active` suffix.
-Section headers and `baseUrl` lines are pushed into the options but never registered in the map, so
-selecting one is a silent no-op.
+**The tree — `Section`, `TreeRow`, `summarize`, `treeRows`, `EndpointTree`, the `/endpoints`
+handler (23 Sept 2026; replaced a flat `ctx.ui.select` list).** One folder per machine. The
+handler builds a `Section` per provider (label, `baseUrl`, `rows` undefined until its probe
+lands), opens the dialog **immediately** through `ctx.ui.custom`, and lets each probe fill in its
+section and call `tree.refresh()` + `tui.requestRender()` as it resolves — so the title reads
+`probing 3…` and counts down. `treeRows(sections, open)` is the pure row model: a `folder` row per
+section and, when open, a dim `url` row and one `model` row per probe `Row`. `summarize(rows)` is
+the closed folder's right-hand text — `1 live · 2 cold` — read back from each label's leading
+`<glyph> <state>` token (two spaces before the id, which is why every probe label is shaped that
+way); `probing…` before the probe lands, `nothing served` on an empty result, `N notes` when only
+glyph-less lines came back. Keys: ↑↓ skip `url` rows; → opens, ← closes (from a model row, closes
+its folder and lands on the folder line); enter or space toggles a folder; enter on a model
+returns its `Row`, and the handler switches with `pi.setModel` as before. `openFolders` is
+module-level so the view is where you left it within a session; the active model's folder is
+always opened on entry. Tested in `tests/endpoints-tree.test.mjs` (row model and summary); the
+component is driven live by a harness.
 
 ### 22 Sept 2026 review fixes
 
@@ -144,24 +155,24 @@ details row says why: metered, and prompts leave through a proxy that may log th
 
 ## Invariants a future change must not break
 
-1. **The probe stays bracketed by `fleet:keys-hold` / `fleet:keys-release` in a `try`/`finally`.**
-   Probing four clusters takes ~10 s and there is no picker on screen yet, so a ↓ pressed while
-   waiting silently focuses [[fleet]]'s agent list and the arrow keys that should have moved the
-   picker are gone by the time it opens. Pi has no command-start event, so a slow command must
-   announce itself. `keysHeld` in fleet.ts is a counter — an unreleased hold wedges the keyboard for
-   the rest of the session.
-2. **The `keys()` helper swallows its emit errors.** It is the only place in this file that can fire
-   after the session went away (a `/reload` during the probe reaches the `finally`), and it must
-   never take the session down for a status detail.
-3. **`pick` is keyed by the exact option string.** Any change to how a row is rendered must change
-   both the pushed string and the map key together, or Enter stops resolving.
+1. **The dialog opens before the probes finish.** Probing four clusters takes ~10 s; with no
+   dialog on screen a ↓ pressed while waiting silently focused [[fleet]]'s agent list, which is why
+   this file used to bracket the probe with `fleet:keys-hold` / `keys-release`. The tree replaces
+   that: it is up at once and owns the keyboard, and probes fill it in. Do not reintroduce an
+   `await` between the command and the dialog. (fleet still honours the hold events for others.)
+2. **Late probe results must not assume the dialog is still there.** `render()` wraps
+   `tui.requestRender()` in a try and is set to `undefined` once the dialog closes; a `/reload`
+   during a probe reaches the `.then` with nothing to draw into and must never throw.
+3. **Every probe label is `<glyph> <state>  <id>…` with two spaces before the id.** `summarize()`
+   reads the state back from that shape; a single space turns `? no auth  id` into a state called
+   "no auth id" and the folder summary goes wrong.
 4. **`shortName` output is a shared vocabulary**, cached by statusbar and used in its sidebar and
    dashboard. Renaming an endpoint here renames it everywhere — which is the point; doing it
    *inconsistently* is the bug.
 5. **A provider's models are assumed to share `models[0].baseUrl`**, for both probe selection and the
    gateway/cluster parse. Mixing base URLs under one provider id silently probes the wrong thing.
-6. `row.model` ⇒ switch; `row.note` alone ⇒ notify. A row with neither is a header and must stay
-   inert.
+6. `row.model` ⇒ switch; `row.note` alone ⇒ notify. A row with neither is a note (a failed
+   sub-probe, an excluded model) and Enter on it does nothing.
 
 ## Gotchas
 

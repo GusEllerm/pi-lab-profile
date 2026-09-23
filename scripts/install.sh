@@ -32,7 +32,8 @@ case "$profile" in
 		copy "$here/profiles/lab/mcp.json" "$agent_dir/mcp.json"
 		mkdir -p "$HOME/.local/bin"
 		for f in "$here"/profiles/lab/bin/*; do copy "$f" "$HOME/.local/bin/$(basename "$f")"; chmod +x "$HOME/.local/bin/$(basename "$f")" 2>/dev/null || true; done
-		echo "  → needs: an 'ssh globus1' host alias, 'uvx alcf-ai auth login' once, and uv on PATH for the hpc-bridge MCP server"
+		echo "  → needs: an 'ssh globus1' host alias, 'uvx alcf-ai auth login' once, uv on PATH for the hpc-bridge MCP server,"
+		echo "           and argo-tools (github.com/GusEllerm/argo-tools, ./argo-setup) for Argo — see the README's 'Joining the lab'"
 		;;
 	example)
 		echo "Example profile"
