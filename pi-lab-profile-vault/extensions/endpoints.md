@@ -27,7 +27,7 @@ enough for it to appear here.
 
 | Command | What it does |
 |---|---|
-| `/endpoints` | Probes every custom provider in `models.json` in parallel, renders one section per provider (label, `baseUrl`, then a row per model with live state and an `◀ active` marker), and opens a picker. Enter on a configured model calls `pi.setModel`; Enter on an offered-but-unconfigured model notifies where to add it; Enter on a header does nothing. |
+| `/endpoints` | Opens a tree at once — one folder per provider (`models.json` plus the two Argo providers registered at runtime), each summarised on the right (`1 live · 2 cold`, `probing…` until its probe lands) — and probes every provider in parallel, filling folders in as results arrive. → / ← / enter / space open and close a folder; an open one shows its `baseUrl` and a row per model with live state and an `◀ active` marker. Enter on a configured model calls `pi.setModel`; on an offered-but-unconfigured model it notifies where to add it. |
 
 ## Configuration
 
