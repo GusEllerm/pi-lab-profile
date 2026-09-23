@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 8451cdeba5a35e5a09fb1b9ffba3ba0aba36b750
+source-hash: 975da8918cef3c4936511fdd8cbfbfc1bfd3ae0c
 documented: 2026-09-20
 ---
 
@@ -133,6 +133,13 @@ code: everything after the ~8 s `await` in the `/endpoints` handler touches `ctx
 survivable only because the host catches a throw inside a *slash-command handler*. A new async path
 outside a command handler would not be. And a URL that lost `/resource_server/` never routed to
 `probeGlobus` — only a host change does that; it now gets the explicit unknown row.
+
+### Argo (23 Sept 2026)
+
+Providers named `argo`/`argo-openai` get their own probe (`probeArgo`: `/health`, then the catalogue
+size — never opens anything) and a deliberate badge: `shortName` is `⚡ argo`, the slot state is at
+least `warn` while up and `error` when [[argo]] reports the tunnel down over `argo:health`. The
+details row says why: metered, and prompts leave through a proxy that may log them.
 
 ## Invariants a future change must not break
 

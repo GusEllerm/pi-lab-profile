@@ -19,7 +19,8 @@ A Pi profile that adds four things to a stock Pi session:
 | **An output picker** | `/open` lists reasoning, bash runs, diffs and writes from the session, in full — [[extensions/outputs]] |
 
 Plus [[extensions/mcp]] (MCP servers as Pi tools — Pi has none built in; the lab config ships
-hpc-bridge), [[extensions/hpc-bridge]] (an enforced spend gate and an HPC row for it),
+hpc-bridge), [[extensions/hpc-bridge]] (an enforced spend gate and an HPC row for it), [[extensions/argo]] (Argonne's
+Argo gateway as providers, with the Duo prompt relayed into the chat),
 [[extensions/endpoints]] (inference endpoints and their health), [[extensions/code-panels]]
 and [[extensions/image-window]].
 

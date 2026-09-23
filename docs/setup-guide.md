@@ -663,6 +663,51 @@ Sequencing goes over pi-subagents' cross-extension RPC (`subagents:rpc:spawn`, t
 notification doesn't cost the parent a turn). Nothing depends on the main model remembering to
 chain the phases.
 
+## 16. Argo: frontier models through argo-tools
+
+Argonne's **Argo** gateway serves OpenAI, Gemini and Claude models to authorised ANL users. It is
+internal-only; [argo-tools](https://github.com/GusEllerm/argo-tools) runs `argo-proxy` on a CELS home
+node and forwards its port to your machine over SSH, so `localhost:44497` speaks both the OpenAI and
+Anthropic APIs, authenticating by **ANL username, not a secret**.
+
+**Prerequisites are not things this profile can do for you:** a CELS account with an SSH key and Duo
+enrolled, and — separately — authorisation to use the Argo Gateway API from your division's AIOps
+representative. Without the latter every reply is an "ACCESS DENIED" notice. Then, in a terminal:
+
+```bash
+git clone https://github.com/GusEllerm/argo-tools.git ~/Projects/argo-tools && cd ~/Projects/argo-tools && ./argo-setup
+```
+
+`extensions/argo.ts` reads `~/.config/argo-tools/config` and, whenever the tunnel is up, registers
+what Argo serves: `argo/<claude-…>` over the Anthropic messages API — thinking levels and cache
+accounting work through the proxy — and `argo-openai/<gpt-…|gemini-…>` over chat completions.
+Aliases are folded (`claude-5-opus` and `claude-opus-5` are one model), `[test]`, embedding and
+reranker models are dropped, and frontier models come first in `/model`.
+
+**The tunnel is deliberately manual.** `argo-down` exists so that nothing on this machine can reach
+Argo until you say so, and the profile honours that: it never runs `argo-up` by itself.
+
+| command | |
+|---|---|
+| `/argo` | status: user, port, up or down, models registered |
+| `/argo on` | runs `argo-up` in a pseudo-terminal the profile owns; its progress lines appear in the chat, and the Duo prompt becomes an input dialog — type `1`, approve the push on your phone. Non-interactive while the bastion control channel is alive (4 h after a Duo) |
+| `/argo down` | runs `argo-down`: the local port closes, the models unregister, and the column says `⚡ argo off` |
+| `/argo reload` | re-read the catalogue and re-register (after bringing the tunnel up in a terminal) |
+
+While the session model is on Argo the column's `ENDPOINT` row reads **`⚡ argo`** in a warning colour,
+and a 30-second health check flips it to `⚡ argo off` the moment the tunnel goes away. That badge is
+deliberate, for two reasons:
+
+- **Argo is metered.** `/round` does not use it by default, and nothing here spends on it unasked.
+- **argo-proxy can log every request body.** With `verbose: true` in `~/.config/argoproxy/config.yaml`
+  on the CELS node — what makes token accounting possible — it writes prompts, file contents and tool
+  calls **in plaintext** to a file in your home directory on a shared node; argo-tools' README reports
+  110 MB in a day. Know what that trade buys before making it, and rotate the log if you leave it on.
+
+**Check:** with the tunnel up, `pi --model argo/claude-sonnet-4-6 -p "Reply with just: ok"` prints
+`ok`, and so does `--model argo-openai/gpt-4o`. `/endpoints` lists Argo as `● up … (N ids served ·
+metered)`; after `/argo down` it lists `? down … (tunnel closed — /argo on)`.
+
 ## 15. Acceptance tests for Part 2
 
 From a throwaway git repo with an uncommitted change:

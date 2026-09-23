@@ -26,7 +26,8 @@
       "./extensions/image-window.ts",
       "./extensions/outputs.ts",
       "./extensions/mcp.ts",
-      "./extensions/hpc-bridge.ts"
+      "./extensions/hpc-bridge.ts",
+      "./extensions/argo.ts"
     ]
   },
   "peerDependencies": {

@@ -40,6 +40,7 @@ regular mode draws into the terminal's own scrollback and has no layout root to 
 | `/images` | keep only the newest N images in context |
 | `/mcp` | MCP servers started for this session and their tools — Pi has no MCP of its own; this profile adds it |
 | `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
+| `/argo` · `/argo on` · `/argo down` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down` |
 
 ### The review panel
 
@@ -79,6 +80,18 @@ code) on one lab's gateway, as a shape to expect rather than a ranking to copy:
 
 Run your own before trusting any model in the critic seat.
 
+### Argo: frontier models, metered
+
+With [argo-tools](https://github.com/GusEllerm/argo-tools) set up, `extensions/argo.ts` registers what
+the Argo gateway serves as two providers: `argo/<claude-…>` over the Anthropic API (thinking levels
+and cache accounting survive the proxy) and `argo-openai/<gpt-…|gemini-…>` over chat completions —
+de-duplicated, test and embedding models dropped, frontier models first. The tunnel is never
+opened on its own: `/argo on` runs `argo-up` inside a pseudo-terminal and turns the Duo prompt
+into a dialog in the chat (type `1`, approve the push); `/argo down` runs `argo-down`. While the
+session model is on Argo the column's `ENDPOINT` row reads `⚡ argo` in a warning colour, because
+Argo is metered and argo-proxy may log every request body on a shared node — see the setup guide.
+`/round` does not use Argo by default for the same reason.
+
 ### MCP servers as tools
 
 `extensions/mcp.ts` starts every server named in `~/.pi/agent/mcp.json` or a project `.pi/mcp.json`
@@ -100,7 +113,7 @@ column shows the facility, block state and spend while connected.
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · hpc-bridge · code-panels · image-window
+extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · hpc-bridge · argo · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
 profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), mcp.json (hpc-bridge), bin helpers
 profiles/example/  a rounds.json template

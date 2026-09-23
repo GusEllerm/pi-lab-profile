@@ -20,6 +20,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const MODELS_JSON = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "models.json");
 const ALCF_HOST = "inference-api.alcf.anl.gov";
+const isArgo = (m: { provider: string }) => m.provider === "argo" || m.provider === "argo-openai";
 const ALCF_TOKEN_ERROR = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "alcf-token", "last-error");
 const PROBE_TIMEOUT_MS = 8000;
 
@@ -200,11 +201,35 @@ async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyMod
 	return rows;
 }
 
+/** Argo: is the tunnel answering, and how much does it serve. Never opens anything. */
+async function probeArgo(models: AnyModel[]): Promise<Row[]> {
+	const base = models[0].baseUrl.replace(/\/v1\/?$/, "").replace(/\/$/, "");
+	try {
+		const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		const served = (await getJson(`${base}/v1/models`)) as { data?: { id: string }[] };
+		const n = served.data?.length ?? 0;
+		return models.map((m) => ({ model: m, label: `● up      ${m.id}  (${n} ids served · metered)` }));
+	} catch (e) {
+		const why = e instanceof Error ? e.message : String(e);
+		return models.map((m) => ({ model: m, label: `? down    ${m.id}  (tunnel closed — /argo on; ${why})` }));
+	}
+}
+
 export default function (pi: ExtensionAPI): void {
 	// Footer slot for statusbar.ts: short endpoint name, ✓/✗ from the last reply.
 	let ctxRef: ExtensionContext | undefined;
 	let lastReply: "ok" | "error" | "plain" = "plain";
+	// argo.ts says whether the tunnel answers; the row must not claim a route that argo-down closed.
+	let argoUp = false;
+	pi.events.on("argo:health", (data) => {
+		argoUp = Boolean((data as { up?: boolean } | undefined)?.up);
+		publishTab();
+	});
 	const shortName = (model: AnyModel): string => {
+		// The lightning bolt is deliberate: an Argo session is metered and its prompts leave through
+		// a proxy that may log them in full. argo-claude badges its status line the same way.
+		if (isArgo(model)) return "⚡ argo";
 		if (hostOf(model.baseUrl) === ALCF_HOST) {
 			const cluster = model.baseUrl.split("/resource_server/")[1]?.split("/")[0] ?? "";
 			return `ALCF ${cluster.charAt(0).toUpperCase()}${cluster.slice(1)}`;
@@ -218,12 +243,16 @@ export default function (pi: ExtensionAPI): void {
 		const ctx = ctxRef;
 		pi.events.emit("statusbar:slot", {
 			id: "endpoint",
-			text: shortName(model),
-			state: lastReply,
+			text: isArgo(model) && !argoUp ? "⚡ argo off" : shortName(model),
+			// on Argo the row is always at least a warning: metered, and logged upstream
+			state: isArgo(model) ? (argoUp ? (lastReply === "error" ? "error" : "warn") : "error") : lastReply,
 			statusKey: "endpoint",
 			details: () => [
 				endpointLabel(ctx, model),
 				`${model.baseUrl} · ${lastReply === "ok" ? "last reply ok" : lastReply === "error" ? "last reply failed" : "no reply yet"}`,
+				...(isArgo(model)
+					? [argoUp ? "metered · prompts leave via the Argo gateway · /argo" : "tunnel is down — /argo on"]
+					: []),
 			],
 		});
 	};
@@ -286,9 +315,11 @@ export default function (pi: ExtensionAPI): void {
 			try {
 				sections = await Promise.all(
 					[...byProvider].map(async ([provider, models]) => {
-						const rows = hostOf(models[0].baseUrl) === ALCF_HOST
-							? await probeAlcf(ctx, provider, models)
-							: await probeGlobus(models);
+						const rows = isArgo(models[0])
+							? await probeArgo(models)
+							: hostOf(models[0].baseUrl) === ALCF_HOST
+								? await probeAlcf(ctx, provider, models)
+								: await probeGlobus(models);
 						return { provider, models, rows };
 					}),
 				);
