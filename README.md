@@ -58,7 +58,7 @@ The [setup guide](docs/setup-guide.md) has the long form of each step; §16 cove
 | `/images` | keep only the newest N images in context |
 | `/mcp` | MCP servers started for this session and their tools — Pi has no MCP of its own; this profile adds it |
 | `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
-| `/argo` · `/argo up` · `/argo down` · `/argo spend` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status and this session's spend; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down`; argo-dash's usage report |
+| `/argo` · `/argo up` · `/argo down` · `/argo spend` · `/argo check` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status and this session's spend; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down`; argo-dash's usage report; probe which listed models actually answer and drop the ones that don't |
 
 ### The review panel
 
@@ -117,6 +117,19 @@ report (`--once` from the proxy log while the tunnel is up, the local ledger oth
 figure is marked `≈` because argo-proxy streams Claude's prompt tokens as zero; Pi's estimate
 stands in, which also keeps the context gauge and auto-compaction honest on Argo.
 
+Argo's catalogue lists models that no longer answer (`claude-opus-4-1`, retired, still listed:
+streaming it returns nothing at all, which Pi reports as "stream ended without a stop reason").
+The profile says so once when it happens, and `/argo check` probes every Claude model with a
+one-token request — metered, so only on request — and drops the dead ones from `/model`.
+
+### Pasting into Pi
+
+Pi's editor needs the terminal to bracket a paste (`ESC[200~ … ESC[201~`); without that the first
+newline submits and every following line goes to the model as its own prompt. `extensions/paste-guard.ts`
+covers terminals and multiplexers that drop the markers: keys arriving faster than a hand can
+type (three inside 80 ms) are held and appended to the editor whole once the burst ends. Real
+bracketed pastes and key sequences pass through untouched.
+
 ### MCP servers as tools
 
 `extensions/mcp.ts` starts every server named in `~/.pi/agent/mcp.json` or a project `.pi/mcp.json`
@@ -138,7 +151,7 @@ column shows the facility, block state and spend while connected.
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · hpc-bridge · argo · code-panels · image-window
+extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · hpc-bridge · argo · paste-guard · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
 profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), mcp.json (hpc-bridge), bin helpers
 profiles/example/  a rounds.json template

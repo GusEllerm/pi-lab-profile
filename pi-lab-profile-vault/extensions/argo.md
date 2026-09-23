@@ -1,6 +1,6 @@
 ---
 source: extensions/argo.ts
-source-hash: 80c9cd098daed2a82714e0f7daf93db568f28ea1
+source-hash: 4fa0bf06129db0e75a3eb5dd15177cc8a51ec9cf
 documented: 2026-09-23
 ---
 
@@ -61,6 +61,18 @@ prompt relayed, de-duplicated real models, a privacy badge.
   tunnel when the terminal window `argo-up` ran in is closed — that is argo-tools' to fix
   (detach the tunnel ssh from the tty; macOS has no `setsid` binary, `python3 -c 'os.setsid()…'`
   does it).
+- **Listed but not answering** (23 Sept 2026, the user's second model). Argo's catalogue still
+  lists `claude-opus-4-1` (retired 2026-08-05 per argo-dash's table). Non-streaming it is a 502
+  ("Failed to parse upstream response"); streaming it is a **200 with no events at all**, which Pi
+  reports three times as "Anthropic stream ended without a stop reason" — and it is the model right
+  after `claude-haiku-4-5` in `/model`, so "the next one" is exactly it. Two answers: the
+  `message_end` hook recognises that wording (`isEmptyStream`) on an Argo message and says once per
+  model what it means; **`/argo check`** (`check all` for the OpenAI path too) sends one
+  non-streaming one-token request per registered model, three at a time, unwraps the proxy's nested
+  error (`probeReason`), adds the failures to `unavailable`, and re-registers without them; `/argo`
+  lists them. Metered, so never automatic — a static denylist was rejected for the same reason the
+  catalogue is read live. `claude-fable-5-1`/`-5` are not in the catalogue at all (Argo answers
+  "not available"), so they never register despite leading `PREFERRED`.
 - **`argo:health {up, port, models}`** on the bus, from a 30 s `/health` poll while registered, so
   [[endpoints]] can flip the `ENDPOINT` row to `⚡ argo down` when `argo-down` closes the port, and
   print `55 ids · 38 models` (catalogue entries, then what survives alias folding) in `/endpoints`.

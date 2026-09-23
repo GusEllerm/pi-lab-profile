@@ -322,6 +322,30 @@ export function repairUsage(usage: Usage | undefined, promptTokens: number, rate
 	};
 }
 
+/** Pi's wording for a stream that ended with no stop reason -- what an unanswering Argo model produces. */
+export function isEmptyStream(errorMessage: string | undefined): boolean {
+	return /stream ended without a stop reason|ended without a stop|no stop reason/i.test(errorMessage ?? "");
+}
+
+/** The useful part of a proxy error body: Argo wraps upstream JSON as a string inside its own JSON. */
+export function probeReason(body: string): string {
+	let text = body.trim();
+	for (let i = 0; i < 3; i++) {
+		try {
+			const j = JSON.parse(text) as { error?: unknown; message?: unknown };
+			const inner = j.error ?? j.message;
+			if (typeof inner === "string") text = inner;
+			else if (inner && typeof inner === "object" && typeof (inner as { message?: unknown }).message === "string") text = (inner as { message: string }).message;
+			else break;
+		} catch {
+			break;
+		}
+		const m = /^Upstream API error: \d+ (.*)$/s.exec(text);
+		if (m) text = m[1];
+	}
+	return text.replace(/\s+/g, " ").slice(0, 160);
+}
+
 /** What this session has spent through Argo: Pi's per-message cost, summed over the branch. */
 export function sessionSpend(entries: { type?: string; message?: { role?: string; provider?: string; usage?: Usage } }[]): { turns: number; cost: number; estimated: boolean; unpriced: number } {
 	const s = { turns: 0, cost: 0, estimated: false, unpriced: 0 };
@@ -445,6 +469,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	let child: ChildProcess | undefined;
 	let poll: ReturnType<typeof setInterval> | undefined;
 	let pricing: Pricing = BUNDLED_PRICING;
+	/** ids /argo check found not answering; kept out of the providers until a later check clears them */
+	const unavailable = new Set<string>();
+	/** models already blamed for an empty stream this session, so the hint appears once each */
+	const hinted = new Set<string>();
 
 	const emit = (event: string, payload: unknown) => {
 		if (dead) return;
@@ -471,7 +499,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		const res = await fetch(`${base()}/v1/models`, { signal: AbortSignal.timeout(10_000) });
 		if (!res.ok) throw new Error(`/v1/models: HTTP ${res.status}`);
 		const payload = (await res.json()) as { data?: { id: string }[] };
-		models = order(dedupe((payload.data ?? []).map((m) => m.id)));
+		models = order(dedupe((payload.data ?? []).map((m) => m.id))).filter((id) => !unavailable.has(id));
 		const p = providers(models, cfg, pricing);
 		pi.registerProvider("argo", p.argo as never);
 		pi.registerProvider("argo-openai", p["argo-openai"] as never);
@@ -479,6 +507,65 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		lastError = undefined;
 		setUp(true, true);
 		return models.length;
+	}
+
+	/**
+	 * Argo's catalogue lists models that do not answer -- claude-opus-4-1, retired 2026-08-05, is
+	 * still listed and returns a 502 non-streaming and, streaming, a 200 with no events at all,
+	 * which Pi reports three times as "stream ended without a stop reason". One non-streaming,
+	 * one-token request per model says which are alive. Metered, so only on request: /argo check.
+	 */
+	async function probeModel(id: string): Promise<string | undefined> {
+		const isClaude = family(id) === "claude";
+		const url = isClaude ? `${base()}/v1/messages` : `${base()}/v1/chat/completions`;
+		const body = isClaude
+			? { model: id, max_tokens: 1, messages: [{ role: "user", content: "ok" }] }
+			: { model: id, max_tokens: 1, messages: [{ role: "user", content: "ok" }] };
+		try {
+			const res = await fetch(url, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-api-key": cfg?.user ?? "", "anthropic-version": "2023-06-01", authorization: `Bearer ${cfg?.user ?? ""}` },
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(90_000),
+			});
+			if (res.ok) return undefined;
+			const text = await res.text();
+			return `HTTP ${res.status}: ${probeReason(text)}`;
+		} catch (e) {
+			return e instanceof Error ? e.message : String(e);
+		}
+	}
+
+	async function runCheck(ctx: ExtensionContext, all: boolean): Promise<void> {
+		if (!registered) return ctx.ui.notify("argo: nothing registered — /argo up first", "warning");
+		const ids = all ? [...models] : models.filter((id) => family(id) === "claude");
+		ctx.ui.setStatus("argo-check", ctx.ui.theme.fg("dim", `argo: probing ${ids.length} models…`));
+		const results = new Map<string, string | undefined>();
+		// three at a time: the proxy is one process on a shared node
+		const queue = [...ids];
+		await Promise.all(
+			Array.from({ length: 3 }, async () => {
+				for (let id = queue.shift(); id; id = queue.shift()) results.set(id, await probeModel(id));
+			}),
+		);
+		ctx.ui.setStatus("argo-check", undefined);
+		if (dead) return;
+		const bad = [...results].filter(([, why]) => why);
+		for (const [id] of bad) unavailable.add(id);
+		for (const [id] of results) if (!results.get(id)) unavailable.delete(id);
+		if (bad.length) {
+			try {
+				await register();
+			} catch {
+				// the models stay as they are; the note below still says which to avoid
+			}
+		}
+		const lines = [
+			`${ids.length - bad.length} of ${ids.length} answered${all ? "" : " (Claude only; /argo check all probes every model)"}`,
+			...bad.map(([id, why]) => `✗ ${id} — ${why}`),
+			...(bad.length ? ["dropped from /model for this session; /argo reload after /argo check keeps them out"] : []),
+		];
+		ctx.ui.notify(lines.join("\n"), bad.length ? "warning" : "info");
 	}
 	function unregister(): void {
 		if (!registered) return;
@@ -513,8 +600,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	// auto-compaction and the price all see a number. Only the `argo` provider: the OpenAI path
 	// reports usage in full (measured with stream_options.include_usage).
 	pi.on("message_end", (event, ctx) => {
-		const m = (event as { message?: { role?: string; provider?: string; model?: string; stopReason?: string; timestamp?: number; usage?: Usage } }).message;
-		if (dead || !m || m.role !== "assistant" || m.provider !== "argo" || !m.usage) return undefined;
+		const m = (event as { message?: { role?: string; provider?: string; model?: string; stopReason?: string; errorMessage?: string; timestamp?: number; usage?: Usage } }).message;
+		if (dead || !m || m.role !== "assistant" || (m.provider !== "argo" && m.provider !== "argo-openai")) return undefined;
+		if (m.stopReason === "error" && isEmptyStream(m.errorMessage) && m.model && !hinted.has(m.model)) {
+			// Pi retries this three times and says the same thing each time; say once what it means
+			hinted.add(m.model);
+			if (ctx.hasUI) ctx.ui.notify(`argo: ${m.model} returned an empty stream — Argo lists it but it does not answer (retired?). Pick another with /model; /argo check probes every Claude model and drops the dead ones`, "warning");
+			return undefined;
+		}
+		if (m.provider !== "argo" || !m.usage) return undefined;
 		if (m.stopReason === "error" || m.stopReason === "aborted") return undefined;
 		const entries = ctx.sessionManager.getBranch() as { type?: string; message?: Msg }[];
 		const prior: Msg[] = [];
@@ -693,13 +787,14 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	}
 
 	pi.registerCommand("argo", {
-		description: "Argo gateway: /argo · /argo up (runs argo-up, Duo prompt in chat) · /argo down · /argo spend · /argo reload",
+		description: "Argo gateway: /argo · /argo up (runs argo-up, Duo prompt in chat) · /argo down · /argo spend · /argo check (which listed models answer) · /argo reload",
 		handler: async (args, ctx) => {
 			if (dead) return;
 			const verb = args.trim().toLowerCase();
 			if (verb === "on" || verb === "up") return runUp(ctx);
 			if (verb === "down" || verb === "off") return runDown(ctx);
 			if (verb === "spend" || verb === "cost" || verb === "usage") return runSpend(ctx);
+			if (verb === "check" || verb === "check all") return runCheck(ctx, verb === "check all");
 			if (verb === "reload") {
 				try {
 					const n = await register();
@@ -714,6 +809,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				cfg ? `${cfg.user} → localhost:${cfg.port} (${cfg.file})` : "not configured — run argo-setup in a terminal",
 				ok ? `up · ${registered ? `${models.length} models registered` : "not registered — /argo reload"}` : "down — /argo up runs argo-up (Duo prompt appears here)",
 				...(lastError ? [`last error: ${lastError}`] : []),
+				...(unavailable.size ? [`not answering, kept out of /model: ${[...unavailable].join(", ")} (/argo check re-probes)`] : []),
 				spendLine(ctx),
 				"/argo spend shows argo-dash's report · metered, and argo-proxy may log request bodies on the CELS node",
 			];

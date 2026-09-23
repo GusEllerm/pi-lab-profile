@@ -8,7 +8,7 @@ import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import argo, { BUNDLED_PRICING, PTY_RELAY, canonical, dedupe, estimateTokens, family, findOnPath, loadPricing, looksLikePrompt, modelDef, order, parsePricing, providers, ratesFor, readArgoConfig, repairUsage, sessionSpend } from "../extensions/argo.ts";
+import argo, { BUNDLED_PRICING, PTY_RELAY, canonical, dedupe, estimateTokens, family, findOnPath, isEmptyStream, loadPricing, looksLikePrompt, modelDef, order, parsePricing, probeReason, providers, ratesFor, readArgoConfig, repairUsage, sessionSpend } from "../extensions/argo.ts";
 
 test("rates: argo-dash's canon rules, promos by date, cache as multiples of input", () => {
 	const p = BUNDLED_PRICING;
@@ -86,6 +86,17 @@ test("repairUsage fills a zeroed prompt count, prices it, marks it, and leaves r
 	const unpriced = repairUsage({ input: 0, output: 4 }, 100, undefined);
 	assert.equal(unpriced.input, 100, "no rate still fixes the token count");
 	assert.equal(unpriced.cost.total, 0);
+});
+
+test("an unanswering model: the empty-stream wording is recognised and the proxy's nested error unwrapped", () => {
+	assert.equal(isEmptyStream("Anthropic stream ended without a stop reason"), true);
+	assert.equal(isEmptyStream("HTTP 429 rate limited"), false);
+	assert.equal(isEmptyStream(undefined), false);
+	// what argo-proxy returned for claude-fable-5-1 and claude-opus-4-1 on 23 Sept 2026
+	assert.equal(probeReason('{"error": "Upstream API error: 400 {\\"type\\":\\"error\\",\\"error\\":{\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"Model \'claude-fable-5-1\' (resolved to \'claude-fable-5-1\') is not available.\\"}}"}'), "Model 'claude-fable-5-1' (resolved to 'claude-fable-5-1') is not available.");
+	assert.equal(probeReason('{"type": "error", "error": {"type": "invalid_request_error", "message": "Failed to parse upstream response: 1 validation error"}}'), "Failed to parse upstream response: 1 validation error");
+	assert.equal(probeReason("<html>Bad Gateway</html>"), "<html>Bad Gateway</html>", "not JSON: returned as is");
+	assert.equal(probeReason("x".repeat(500)).length, 160, "bounded");
 });
 
 test("sessionSpend sums Argo turns only and reports what it could not price", () => {

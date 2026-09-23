@@ -693,6 +693,7 @@ Argo until you say so, and the profile honours that: it never runs `argo-up` by 
 | `/argo up` | runs `argo-up` in a pseudo-terminal the profile owns; its progress lines appear in the chat, and the Duo prompt becomes an input dialog — type `1`, approve the push on your phone. Non-interactive while the bastion control channel is alive (4 h after a Duo) |
 | `/argo down` | runs `argo-down`: the local port closes, the models unregister, and the column says `⚡ argo down` |
 | `/argo spend` | argo-dash's usage report in a page: `argo-dash --once` (the proxy log, exact input and cache counts, about a second) while the tunnel is up, `argo-dash --totals` (the local ledger) otherwise |
+| `/argo check` | one one-token request per Claude model (`/argo check all` for every model) to find the listed models that do not answer; they are dropped from `/model` for the session. Metered, so never automatic. Known case: `claude-opus-4-1` — retired, still in the catalogue, streams nothing, which Pi reports three times as "stream ended without a stop reason"; the profile explains that once when it happens |
 | `/argo reload` | re-read the catalogue and re-register (after bringing the tunnel up in a terminal) |
 
 **Spend.** Claude models register with argo-dash's price table — Anthropic's public list rates, the

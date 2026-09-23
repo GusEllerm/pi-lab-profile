@@ -25,6 +25,7 @@
       "./extensions/code-panels.ts",
       "./extensions/image-window.ts",
       "./extensions/outputs.ts",
+      "./extensions/paste-guard.ts",
       "./extensions/mcp.ts",
       "./extensions/hpc-bridge.ts",
       "./extensions/argo.ts"
