@@ -1,6 +1,6 @@
 ---
 source: extensions/paste-guard.ts
-source-hash: 09face65144c81958889731a3ba9859e318bec93
+source-hash: f7c9ee13a8a9acfee25757a6a63c2e6362262ab2
 documented: 2026-09-23
 ---
 
@@ -41,6 +41,12 @@ first two keys were typed into the editor before the burst was known and stay th
 drew nothing until the next key — measured: the editor read the whole paste, the screen showed
 `fi`. A status write is the one API an extension has that asks for a frame, so the flush sets and
 clears `setStatus("paste-guard")`.
+
+The first multi-line burst in a session also gets a notice naming the cause (the terminal sent no
+markers; the iTerm2 profile setting, the tmux issue), so the symptom is explained where it happens
+rather than silently patched. The user's case: pasted with ⌘V from another iTerm2 window; the same
+text and a 28 KB one, bracketed, into Pi with the whole profile both collapsed to `[paste #1 +N
+lines]` — so it was the terminal, not Pi, that dropped the markers that time.
 
 Anything containing an escape byte — arrows, mouse reports, a real bracketed paste — is never held
 and ends a burst (flushing what was held first). A paste whose first line is two characters long can

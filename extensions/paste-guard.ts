@@ -67,11 +67,17 @@ export default function (pi: ExtensionAPI): void {
 		off = undefined;
 		if (!ctx.hasUI) return;
 		const burst = new PasteBurst();
+		let explained = false;
 		const flush = () => {
 			timer = undefined;
 			const text = burst.flush();
 			if (!text) return;
 			ctx.ui.setEditorText(ctx.ui.getEditorText() + text);
+			// once a session: a multi-line burst means the terminal sent no markers, which is a setting
+			if (!explained && text.includes("\n")) {
+				explained = true;
+				ctx.ui.notify("paste-guard: that paste arrived without bracketed-paste markers, so it was reassembled from keystrokes. In iTerm2 check Profiles › Terminal › “Terminal may enable paste bracketing”; in tmux see pi issue #2376.", "info");
+			}
 			// Pi renders after input, not after a timer: setting the editor from here draws nothing until
 			// the next key. A status write is the one API an extension has that asks for a frame.
 			ctx.ui.setStatus("paste-guard", "");

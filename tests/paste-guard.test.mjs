@@ -42,7 +42,8 @@ test("the extension consumes a burst and appends it to the editor after the quie
 	let terminal;
 	let editor = "";
 	const statuses = [];
-	const ctx = { hasUI: true, ui: { onTerminalInput: (h) => { terminal = h; return () => { terminal = undefined; }; }, getEditorText: () => editor, setEditorText: (t) => { editor = t; }, setStatus: (k, v) => statuses.push([k, v]) } };
+	const notices = [];
+	const ctx = { hasUI: true, ui: { onTerminalInput: (h) => { terminal = h; return () => { terminal = undefined; }; }, getEditorText: () => editor, setEditorText: (t) => { editor = t; }, setStatus: (k, v) => statuses.push([k, v]), notify: (m) => notices.push(m) } };
 	pasteGuard({ on: (e, h) => handlers.set(e, h) });
 	handlers.get("session_start")({}, ctx);
 	const results = [...`ab\rcd`].map((ch) => terminal(ch));
@@ -51,6 +52,11 @@ test("the extension consumes a burst and appends it to the editor after the quie
 	await new Promise((r) => setTimeout(r, 120));
 	assert.equal(editor, "\ncd", "the held part, appended once");
 	assert.deepEqual(statuses, [["paste-guard", ""], ["paste-guard", undefined]], "a status write and clear asks Pi for a frame, since a timer alone draws nothing");
+	assert.equal(notices.length, 1, "a multi-line burst is explained once");
+	assert.match(notices[0], /bracketed-paste markers/);
+	[..."xy\rz"].forEach((ch) => terminal(ch));
+	await new Promise((r) => setTimeout(r, 120));
+	assert.equal(notices.length, 1, "and only once a session");
 	handlers.get("session_shutdown")();
 	assert.equal(terminal, undefined, "unsubscribed on shutdown");
 	handlers.get("session_start")({}, { hasUI: false, ui: ctx.ui });
