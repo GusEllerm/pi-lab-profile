@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import layer, { IDLE_S, applyResult, describe, hpcPrefix, isFresh, looksLikeCredential, parseResult } from "../extensions/hpc-bridge.ts";
+import layer, { IDLE_S, applyResult, describe, findPluginSkill, hpcPrefix, installSkill, isFresh, looksLikeCredential, parseResult, readMcpServers, skillText, toolPrefix } from "../extensions/hpc-bridge.ts";
+import { readFileSync, utimesSync } from "node:fs";
 
 function fakePi() {
 	const handlers = new Map();
@@ -22,15 +23,15 @@ function fakePi() {
 	};
 }
 
-/** A cwd whose .pi/mcp.json names hpc-bridge under the given server name, and a HOME with no global file. */
+/** A cwd whose .pi/mcp.json names hpc-bridge under the given server name, and an agent dir with no global file. */
 function withConfig(serverName = "hpc", extra = {}) {
 	const cwd = mkdtempSync(join(tmpdir(), "hpcb-"));
-	const home = mkdtempSync(join(tmpdir(), "hpcb-home-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "hpcb-agent-"));
 	mkdirSync(join(cwd, ".pi"), { recursive: true });
-	writeFileSync(join(cwd, ".pi", "mcp.json"), JSON.stringify({ servers: { [serverName]: { command: "uvx", args: ["--from", "git+https://x/hpc-bridge", "hpc-bridge"], ...extra } } }));
-	const saved = { cwd: process.cwd(), home: process.env.HOME };
-	process.chdir(cwd); process.env.HOME = home;
-	return () => { process.chdir(saved.cwd); process.env.HOME = saved.home; rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); };
+	writeFileSync(join(cwd, ".pi", "mcp.json"), JSON.stringify({ mcpServers: { [serverName]: { command: "uvx", args: ["--from", "git+https://x/hpc-bridge", "hpc-bridge"], ...extra } } }));
+	const saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
+	process.chdir(cwd); process.env.PI_CODING_AGENT_DIR = agentDir;
+	return () => { process.chdir(saved.cwd); if (saved.agentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.agentDir; rmSync(cwd, { recursive: true, force: true }); rmSync(agentDir, { recursive: true, force: true }); };
 }
 
 test("the credential pattern is hpc-bridge's own", () => {
@@ -68,7 +69,7 @@ test("describe: a compact column and a full account, and the notice only in the 
 	assert.deepEqual(warm.column, ["globus-labs", "up · warm 5m", "main · lab", "0.30 node-h"], "four short rows, no prose");
 	assert.ok(warm.column.every((row) => row.length <= 21), warm.column.join(" | "));
 	assert.ok(warm.full.some((d) => /worker live on globus1/.test(d)), "the notice is in the full account");
-	assert.ok(warm.full.some((d) => /release the block: hpc_stop_endpoint/.test(d)));
+	assert.ok(warm.full.some((d) => /release the block: mcp__hpc__stop_endpoint/.test(d)));
 	assert.equal(describe({ facility: "x", status: "needs_login" }).state, "warn");
 	assert.deepEqual(describe({ facility: "x", status: "needs_login" }).column, ["x", "needs login"]);
 	assert.equal(describe({ facility: "x", status: "failed" }).state, "error");
@@ -77,13 +78,19 @@ test("describe: a compact column and a full account, and the notice only in the 
 	assert.match(describe({ facility: "x", status: "up", block: "warm", warmSince: 0 }, 130 * 60_000).column[1], /warm 2h10m/);
 });
 
-test("the tool prefix follows mcp.json, including a custom prefix and no prefix", () => {
-	let restore = withConfig("hpc"); try { assert.equal(hpcPrefix(process.cwd()), "hpc_"); } finally { restore(); }
-	restore = withConfig("cluster", { prefix: "sc" }); try { assert.equal(hpcPrefix(process.cwd()), "sc_"); } finally { restore(); }
-	restore = withConfig("hpc", { prefix: false }); try { assert.equal(hpcPrefix(process.cwd()), ""); } finally { restore(); }
+test("the tool prefix is Pi's mcp__<server>__ for the server whose command mentions hpc-bridge", () => {
+	assert.equal(toolPrefix("hpc"), "mcp__hpc__");
+	assert.equal(toolPrefix("hpc-bridge"), "mcp__hpc_bridge__", "Pi replaces anything but letters, digits and _");
+	let restore = withConfig("hpc"); try { assert.equal(hpcPrefix(process.cwd()), "mcp__hpc__"); } finally { restore(); }
+	restore = withConfig("cluster"); try { assert.equal(hpcPrefix(process.cwd()), "mcp__cluster__"); } finally { restore(); }
 	restore = withConfig("other"); try {
-		writeFileSync(join(process.cwd(), ".pi", "mcp.json"), JSON.stringify({ servers: { other: { command: "node", args: ["x.mjs"] } } }));
+		writeFileSync(join(process.cwd(), ".pi", "mcp.json"), JSON.stringify({ mcpServers: { other: { command: "node", args: ["x.mjs"] } } }));
 		assert.equal(hpcPrefix(process.cwd()), undefined, "no hpc-bridge server, no prefix");
+		// the agent directory's file is read too, and a project entry without a command only overrides exposure
+		writeFileSync(join(process.env.PI_CODING_AGENT_DIR, "mcp.json"), JSON.stringify({ mcpServers: { hpc: { command: "uvx", args: ["hpc-bridge"] } } }));
+		writeFileSync(join(process.cwd(), ".pi", "mcp.json"), JSON.stringify({ mcpServers: { hpc: { enabled: false } } }));
+		assert.deepEqual(Object.keys(readMcpServers(process.cwd())), ["hpc"]);
+		assert.equal(hpcPrefix(process.cwd()), "mcp__hpc__");
 	} finally { restore(); }
 });
 
@@ -96,32 +103,32 @@ test("the spend gate: declined blocks, accepted allows, confirm_spend=false neve
 		const asked = [];
 		const ctx = (answer) => ({ hasUI: true, ui: { confirm: async (title, msg) => { asked.push([title, msg]); return answer; } } });
 
-		const declined = await call({ type: "tool_call", toolCallId: "1", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: true, partition: "gpu" } }, ctx(false));
+		const declined = await call({ type: "tool_call", toolCallId: "1", toolName: "mcp__hpc__ensure_endpoint_up", input: { confirm_spend: true, partition: "gpu" } }, ctx(false));
 		assert.equal(declined.block, true);
 		assert.match(declined.reason, /declined/);
 		assert.match(asked[0][1], /Partition: gpu/);
 
 		// before any accepted allocation, confirm_spend=false provisions nothing (the server's own
 		// floor answers needs_confirmation), so there is nothing to ask about
-		const noSpend = await call({ type: "tool_call", toolCallId: "3", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: false } }, ctx(false));
+		const noSpend = await call({ type: "tool_call", toolCallId: "3", toolName: "mcp__hpc__ensure_endpoint_up", input: { confirm_spend: false } }, ctx(false));
 		assert.equal(noSpend, undefined);
 		assert.equal(asked.length, 1, "confirm_spend=false does not ask while spend is unconfirmed");
 
-		const accepted = await call({ type: "tool_call", toolCallId: "2", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: true } }, ctx(true));
+		const accepted = await call({ type: "tool_call", toolCallId: "2", toolName: "mcp__hpc__ensure_endpoint_up", input: { confirm_spend: true } }, ctx(true));
 		assert.equal(accepted, undefined, "an accepted call proceeds untouched");
 		assert.equal(asked.length, 2);
 		// from here spend is confirmed and no warm result has arrived, so a provisioning call asks again
 		// (as a restart) -- covered in detail by "the gate keys on provisioning, not on the flag"
 
-		const headless = await call({ type: "tool_call", toolCallId: "4", toolName: "hpc_ensure_endpoint_up", input: { confirm_spend: true } }, { hasUI: false, ui: {} });
+		const headless = await call({ type: "tool_call", toolCallId: "4", toolName: "mcp__hpc__ensure_endpoint_up", input: { confirm_spend: true } }, { hasUI: false, ui: {} });
 		assert.equal(headless.block, true);
 		assert.match(headless.reason, /no UI/);
 
-		const guarded = await call({ type: "tool_call", toolCallId: "5", toolName: "hpc_run_shell", input: { command: "export API_KEY=abc && ./run" } }, ctx(true));
+		const guarded = await call({ type: "tool_call", toolCallId: "5", toolName: "mcp__hpc__run_shell", input: { command: "export API_KEY=abc && ./run" } }, ctx(true));
 		assert.equal(guarded.block, true, "the credential guard covers run_shell");
 		const bash = await call({ type: "tool_call", toolCallId: "6", toolName: "bash", input: { command: "PASSWORD=x ./thing" } }, ctx(true));
 		assert.equal(bash.block, true, "and bash");
-		const clean = await call({ type: "tool_call", toolCallId: "7", toolName: "hpc_login_shell", input: { command: "sinfo -s" } }, ctx(true));
+		const clean = await call({ type: "tool_call", toolCallId: "7", toolName: "mcp__hpc__login_shell", input: { command: "sinfo -s" } }, ctx(true));
 		assert.equal(clean, undefined);
 	} finally { restore(); }
 });
@@ -133,15 +140,15 @@ test("results publish the hpc slot for the column", async () => {
 		layer(pi);
 		pi.handlers.get("session_start")();
 		assert.equal(pi.emitted.at(-1)[1].state, "idle");
-		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "1", toolName: "hpc_connect_facility", isError: false, content: [{ type: "text", text: '{"phase":"needs_account","facility":"globus-labs","allocations":[]}' }] });
+		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "1", toolName: "mcp__hpc__connect_facility", isError: false, content: [{ type: "text", text: '{"phase":"needs_account","facility":"globus-labs","allocations":[]}' }] });
 		let [, slot] = pi.emitted.at(-1);
 		assert.equal(slot.id, "hpc"); assert.equal(slot.state, "warn"); assert.match(slot.text, /globus-labs/);
-		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "2", toolName: "hpc_ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"up","block_state":"warm","session_spend":0.1,"partition":"gpu","account":"lab"}' }] });
+		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "2", toolName: "mcp__hpc__ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"up","block_state":"warm","session_spend":0.1,"partition":"gpu","account":"lab"}' }] });
 		[, slot] = pi.emitted.at(-1);
 		assert.equal(slot.state, "busy");
 		assert.ok(slot.details().some((d) => /gpu · lab/.test(d)), slot.details().join(" | "));
 		const before = pi.emitted.length;
-		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "3", toolName: "hpc_run_shell", isError: true, content: [{ type: "text", text: "boom" }] });
+		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "3", toolName: "mcp__hpc__run_shell", isError: true, content: [{ type: "text", text: "boom" }] });
 		assert.equal(pi.emitted.length, before, "an errored result does not change the slot");
 		const notes = [];
 		await pi.commands.get("hpc").handler("", { ui: { notify: (m) => notes.push(m) } });
@@ -160,8 +167,6 @@ test("warmth is a fact with a TTL: fresh within the idle window, aged out after 
 	assert.equal(aged.state, "warn");
 	assert.match(aged.column[1], /warm\? no news 12m/);
 	assert.ok(aged.full.some((d) => /may restart the block/.test(d)));
-	assert.equal(describe({ facility: "x", block: "warm", serverDown: t0, at: t0 }, t0 + 3 * 60_000).state, "error");
-	assert.deepEqual(describe({ facility: "x", block: "warm", serverDown: t0, at: t0 }, t0 + 3 * 60_000).column, ["x", "server down 3m"]);
 });
 
 test("the gate keys on provisioning, not on the flag", async () => {
@@ -173,8 +178,8 @@ test("the gate keys on provisioning, not on the flag", async () => {
 		const result = pi.handlers.get("tool_result");
 		const asked = [];
 		const ctx = (answer) => ({ hasUI: true, ui: { confirm: async (title, msg) => { asked.push([title, msg]); return answer; } } });
-		const ensure = (input, c) => call({ type: "tool_call", toolCallId: "e", toolName: "hpc_ensure_endpoint_up", input }, c);
-		const run = (input, c) => call({ type: "tool_call", toolCallId: "r", toolName: "hpc_run_shell", input }, c);
+		const ensure = (input, c) => call({ type: "tool_call", toolCallId: "e", toolName: "mcp__hpc__ensure_endpoint_up", input }, c);
+		const run = (input, c) => call({ type: "tool_call", toolCallId: "r", toolName: "mcp__hpc__run_shell", input }, c);
 
 		// before any confirmation: the server's own floor answers needs_confirmation without provisioning, so no dialog
 		assert.equal(await ensure({ confirm_spend: false }, ctx(true)), undefined);
@@ -187,7 +192,7 @@ test("the gate keys on provisioning, not on the flag", async () => {
 		assert.match(asked[0][0], /^Start/);
 
 		// a fresh warm result: commands flow without asking
-		result({ type: "tool_result", toolCallId: "1", toolName: "hpc_ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"up","block_state":"warm","session_spend":0.01}' }] });
+		result({ type: "tool_result", toolCallId: "1", toolName: "mcp__hpc__ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"up","block_state":"warm","session_spend":0.01}' }] });
 		assert.equal(await run({ command: "hostname" }, ctx(true)), undefined);
 		assert.equal(await ensure({ confirm_spend: false }, ctx(true)), undefined);
 		assert.equal(asked.length, 1, "nothing asked while the block is provably warm");
@@ -213,19 +218,67 @@ test("the gate keys on provisioning, not on the flag", async () => {
 	} finally { restore(); }
 });
 
-test("a server that stops answering shows in the row", () => {
-	const restore = withConfig("hpc");
+test("with no mcp.json at all, hpc-bridge's tools are still recognised under any server name", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "hpcb-noconf-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "hpcb-noconf-agent-"));
+	const saved = { cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR };
+	process.chdir(cwd); process.env.PI_CODING_AGENT_DIR = agentDir;
 	try {
 		const pi = fakePi();
 		layer(pi);
-		pi.handlers.get("tool_result")({ type: "tool_result", toolCallId: "1", toolName: "hpc_connect_facility", isError: false, content: [{ type: "text", text: '{"phase":"provisioning","facility":"globus-labs"}' }] });
-		pi.bus.get("mcp:server")({ name: "hpc", up: false, since: Date.now() - 120_000 });
-		let [, slot] = pi.emitted.at(-1);
-		assert.equal(slot.state, "error");
-		assert.match(slot.text, /server down/);
-		pi.bus.get("mcp:server")({ name: "other", up: false, since: Date.now() }); // not ours: ignored
-		pi.bus.get("mcp:server")({ name: "hpc", up: true });
-		[, slot] = pi.emitted.at(-1);
-		assert.notEqual(slot.state, "error");
-	} finally { restore(); }
+		const asked = [];
+		const ctx = { hasUI: true, ui: { confirm: async (t, m) => { asked.push(t); return false; } } };
+		const blocked = await pi.handlers.get("tool_call")({ type: "tool_call", toolCallId: "1", toolName: "mcp__supercomputer__ensure_endpoint_up", input: { confirm_spend: true } }, ctx);
+		assert.equal(blocked.block, true, "the gate still applies");
+		assert.equal(await pi.handlers.get("tool_call")({ type: "tool_call", toolCallId: "2", toolName: "mcp__other__ensure_something", input: {} }, ctx), undefined, "a tool outside hpc-bridge's set is ignored");
+	} finally {
+		process.chdir(saved.cwd); if (saved.agentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved.agentDir;
+		rmSync(cwd, { recursive: true, force: true }); rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("the driving-hpc skill comes from the installed plugin: newest copy in uv's cache, frontmatter quoted", () => {
+	const cache = mkdtempSync(join(tmpdir(), "uv-cache-"));
+	const agentDir = mkdtempSync(join(tmpdir(), "hpcb-agent-"));
+	try {
+		assert.equal(findPluginSkill(cache), undefined, "nothing installed yet");
+		// upstream's frontmatter: an unquoted description with ': ' inside, which Pi's YAML rejects
+		const upstream = "---\nname: driving-hpc\ndescription: How to drive HPC well: do X → Y. Flow: a (b) → c\n---\n\n# Driving HPC\n\nbody\n";
+		const old = join(cache, "archive-v0", "aaa", "hpc_bridge", "_guidance");
+		const recent = join(cache, "archive-v0", "bbb", "lib", "python3.13", "site-packages", "hpc_bridge", "_guidance");
+		mkdirSync(old, { recursive: true }); mkdirSync(recent, { recursive: true });
+		writeFileSync(join(old, "SKILL.md"), upstream.replace("body", "old body"));
+		writeFileSync(join(recent, "SKILL.md"), upstream);
+		utimesSync(join(old, "SKILL.md"), new Date(Date.now() - 86_400_000), new Date(Date.now() - 86_400_000));
+		assert.equal(findPluginSkill(cache), join(recent, "SKILL.md"), "the most recently installed version wins");
+		const dir = installSkill(agentDir, findPluginSkill(cache));
+		assert.equal(dir, join(agentDir, "cache", "hpc-bridge", "driving-hpc"));
+		const written = readFileSync(join(dir, "SKILL.md"), "utf8");
+		assert.ok(written.startsWith('---\nname: "driving-hpc"\ndescription: "How to drive HPC well: do X → Y. Flow: a (b) → c"\n---\n'), written.split("\n").slice(0, 4).join("|"));
+		assert.ok(written.endsWith("# Driving HPC\n\nbody\n"), "the body is the plugin's, untouched");
+		assert.equal(skillText("no frontmatter at all"), '---\nname: "driving-hpc"\ndescription: "Operations guidance served by hpc-bridge"\n---\n\nno frontmatter at all');
+		assert.equal(installSkill(agentDir, undefined), undefined);
+	} finally {
+		rmSync(cache, { recursive: true, force: true }); rmSync(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("resources_discover advertises the skill only when the server is configured and the plugin is installed", () => {
+	const restore = withConfig("hpc");
+	const cache = mkdtempSync(join(tmpdir(), "uv-cache-"));
+	const savedCache = process.env.UV_CACHE_DIR;
+	process.env.UV_CACHE_DIR = cache;
+	try {
+		let pi = fakePi(); layer(pi);
+		assert.equal(pi.handlers.get("resources_discover")({ type: "resources_discover", cwd: process.cwd(), reason: "startup" }), undefined, "plugin not installed: nothing advertised");
+		const guidance = join(cache, "archive-v0", "x", "hpc_bridge", "_guidance");
+		mkdirSync(guidance, { recursive: true });
+		writeFileSync(join(guidance, "SKILL.md"), "---\nname: driving-hpc\ndescription: d: e\n---\nbody\n");
+		pi = fakePi(); layer(pi);
+		const found = pi.handlers.get("resources_discover")({ type: "resources_discover", cwd: process.cwd(), reason: "startup" });
+		assert.deepEqual(found, { skillPaths: [join(process.env.PI_CODING_AGENT_DIR, "cache", "hpc-bridge")] });
+	} finally {
+		if (savedCache === undefined) delete process.env.UV_CACHE_DIR; else process.env.UV_CACHE_DIR = savedCache;
+		rmSync(cache, { recursive: true, force: true }); restore();
+	}
 });

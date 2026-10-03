@@ -1,16 +1,15 @@
 {
-  "_comment": "MCP servers extensions/mcp.ts starts for every session. hpc-bridge needs uv on PATH and a Globus login on first use; the Globus Labs cluster is in its public registry as a multi-user endpoint, so it attaches with no SSH.",
-  "servers": {
+  "mcpServers": {
     "hpc": {
+      "description": "hpc-bridge: find an HPC facility, log in to Globus once, start a billed compute block, run commands on it, release it. Needs uv on PATH; the Globus Labs cluster attaches with no SSH.",
       "command": "uvx",
       "args": ["--from", "git+https://github.com/globus-labs/hpc-bridge", "hpc-bridge"],
       "env": {
         "HPC_BRIDGE_USER_DIR": "~/.pi/agent/hpc-bridge/user",
-        "HPC_BRIDGE_STATE_DIR": "~/.pi/agent/hpc-bridge/state",
-        "HPC_BRIDGE_OMIT_INSTRUCTIONS": "1"
+        "HPC_BRIDGE_STATE_DIR": "~/.pi/agent/hpc-bridge/state"
       },
-      "timeoutMs": 180000,
-      "skills": [{ "uri": "hpcbridge://guidance/operations", "name": "driving-hpc" }]
+      "timeout": 180,
+      "exposure": "direct"
     }
   }
 }

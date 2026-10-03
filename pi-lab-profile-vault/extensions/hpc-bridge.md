@@ -1,16 +1,31 @@
 ---
 source: extensions/hpc-bridge.ts
-source-hash: d311a6a2148137059b0aa83197ab7e9a01be2ac6
+source-hash: 869f92656725c739787f03fe9ea5a0eed6c36cc9
 documented: 2026-09-22
 ---
 
-# hpc-bridge.ts — the enforced spend gate, the credential guard, and the HPC row
+# hpc-bridge.ts — the enforced spend gate, the credential guard, the HPC row, and the plugin's skill
 
-What this profile adds on top of [[mcp]] for one server. hpc-bridge can allocate a **billed** compute
-block on a supercomputer; its own gate is the tool parameter `ensure_endpoint_up(confirm_spend=True)`,
-which on Claude Code a skill tells the model to ask about first. Nothing enforces that on any host,
-and Pi has no permission popups. This does. Built 22 Sept 2026 as option B of
-[[../investigations/hpc-bridge-integration]].
+What this profile adds on top of Pi's MCP support for one server. hpc-bridge can allocate a
+**billed** compute block on a supercomputer; its own gate is the tool parameter
+`ensure_endpoint_up(confirm_spend=True)`, which on Claude Code a skill tells the model to ask about
+first. Nothing enforces that on any host, and Pi has no permission popups. This does. Built 22 Sept
+2026 as option B of [[../investigations/hpc-bridge-integration]]; moved onto Pi 1.0's built-in MCP
+on 3 Oct 2026, when this profile's own bridge (`extensions/mcp.ts`, options A + C) was retired —
+Pi reads the same `mcp.json` (`mcpServers` key), names the tools `mcp__<server>__<tool>`, owns
+`/mcp`, and had been refusing to load its built-in while ours registered the same command.
+
+**The skill is the plugin's, not ours.** hpc-bridge bundles `skills/driving-hpc/SKILL.md` into its
+wheel as `hpc_bridge/_guidance/SKILL.md`, and uvx keeps every installed version in uv's cache
+(`UV_CACHE_DIR`, else `~/.cache/uv`). At load, `findPluginSkill` takes the newest of those,
+`skillText` re-emits the frontmatter as quoted YAML — upstream's `description:` contains `: ` and
+Pi's parser reports it as a skill conflict — and `installSkill` writes it to
+`<agent-dir>/cache/hpc-bridge/driving-hpc/SKILL.md`, advertised through `resources_discover`.
+The body is never touched and nothing is copied into the repository (a vendored copy was written
+and reverted the same day, at the user's objection: updates must come through the plugin). Until
+the server has been installed once there is nothing to advertise. The honest fix is upstream:
+valid YAML in the frontmatter, or a `package.json` with `pi.skills` so `pi install
+git:github.com/globus-labs/hpc-bridge` loads the skill natively.
 
 ## What it owns
 
@@ -33,8 +48,12 @@ the model; in the column it wrapped into seven rows cut mid-word, which is why i
 `describe` turns the state into the column's HPC row — hidden until a
   facility is connected, `busy` while a block is warm or provisioning, `warn` on `needs_*`,
   `draining`, `tearing_down`, `error` on `failed`. `/hpc` prints the same.
-- **The tool prefix follows `mcp.json`** (`hpcPrefix`): the server whose command mentions
-  `hpc-bridge`, honouring a custom or empty `prefix`.
+- **The tool prefix follows `mcp.json`** (`readMcpServers`, `hpcServer`, `toolPrefix`): the server
+  whose command mentions `hpc-bridge`, named as Pi names it — `mcp__<server>__` with anything but
+  letters, digits and `_` replaced by `_`. The agent directory's file is read first and a project
+  `.pi/mcp.json` entry wins by name (one without a `command` only overrides exposure, as in Pi).
+  With no config at all, any `mcp__<x>__<tool>` whose tool is in hpc-bridge's set (`HPC_TOOLS`) is
+  still gated, so a server configured somewhere this file does not look is not a hole.
 
 ### The gate keys on provisioning, not on the flag (22 Sept 2026)
 
@@ -57,7 +76,10 @@ turns `warn` and reads `warm? no news 12m` — rather than polling something tha
 fix is upstream: a read-only `endpoint_status` tool (~30 lines in `server.py`) reporting the
 in-memory runtime; the hpc-bridge session confirmed both the gap and the fix, and it is Gus's call.
 
-`server down Nm` (error) appears when the bridge's heartbeat loses the server.
+There is no heartbeat any more: the retired bridge pinged the server every 30 s and the row said
+`server down Nm`; Pi's built-in MCP exposes no liveness signal to extensions (tools stay registered
+across a dropped connection, which reconnects on the next call), so `/mcp` is where the connection
+state lives and the row says nothing it cannot know.
 
 ## Invariants a future change must not break
 
@@ -79,4 +101,4 @@ in-memory runtime; the hpc-bridge session confirmed both the gap and the fix, an
 
 ## Related
 
-[[mcp]] · [[statusbar]] · [[../investigations/hpc-bridge-integration]]
+[[statusbar]] · [[../investigations/hpc-bridge-integration]]

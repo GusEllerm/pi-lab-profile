@@ -1,8 +1,8 @@
 /**
- * hpc-bridge — what this profile adds on top of the MCP bridge for one server.
+ * hpc-bridge — what this profile adds on top of Pi's MCP support for one server.
  *
- * hpc-bridge (extensions/mcp.ts starts it from mcp.json) can allocate a billed compute block on a
- * supercomputer. Its own spend gate is a tool parameter: ensure_endpoint_up(confirm_spend=True). On
+ * hpc-bridge (Pi starts it from mcp.json; since Pi 1.0 that is built in) can allocate a billed
+ * compute block on a supercomputer. Its own spend gate is a tool parameter: ensure_endpoint_up(confirm_spend=True). On
  * Claude Code a skill tells the model to ask the user first; nothing enforces that on any host, and
  * Pi has no permission popups at all. So:
  *
@@ -15,10 +15,19 @@
  *     partition and account -- read from the server's own result objects as they come back.
  *
  * Nothing here talks to the server. It observes tool calls and results through Pi's events and
- * reads the same mcp.json the bridge reads, so the tool prefix follows that config.
+ * reads the same mcp.json Pi reads, so the tool prefix (`mcp__<server>__`) follows that config.
+ *
+ * The operations guidance is the plugin's own. hpc-bridge ships it as skills/driving-hpc/SKILL.md,
+ * bundled into the wheel at hpc_bridge/_guidance/SKILL.md; uvx keeps every installed version in
+ * uv's cache. At load this finds the newest of those, re-emits its frontmatter as quoted YAML (the
+ * original's is not valid YAML, which Pi reports as a skill conflict) into the agent cache dir, and
+ * advertises it through resources_discover. Nothing is copied into this repository: a new
+ * hpc-bridge release reaches the skill the next time uvx installs it.
  */
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { readConfig } from "./mcp.ts";
 
 /** hpc-bridge's own guard, hooks/credential-guard.sh: a credential-looking key followed by = or :. */
 export const CREDENTIAL = /(password|api[_-]?key|secret|token)\s*[=:]/i;
@@ -42,8 +51,6 @@ export type HpcState = {
 	at?: number;
 	/** spend has been acknowledged this session -- from then on the server re-provisions without asking */
 	spendConfirmed?: boolean;
-	/** the MCP server stopped answering pings */
-	serverDown?: number;
 };
 
 /**
@@ -127,16 +134,12 @@ const warmFor = (since: number, now: number): string => {
  * (py3.12.3, dill0.3.9). billed block bounds -- a task runs up to ~7180s...") and it wrapped into
  * seven rows cut mid-word. `full` has everything, for /hpc and the dashboard.
  */
-export function describe(s: HpcState, now = Date.now()): { text: string; state: SlotState; column: string[]; full: string[] } {
+export function describe(s: HpcState, now = Date.now(), prefix = "mcp__hpc__"): { text: string; state: SlotState; column: string[]; full: string[] } {
 	if (!s.facility && !s.status) {
 		const idle = ["no facility connected", "ask: what HPC facilities can I use?"];
 		return { text: "hpc –", state: "idle", column: idle, full: idle };
 	}
 	const facility = s.facility ?? "?";
-	if (s.serverDown !== undefined) {
-		const rows = [facility, `server down ${warmFor(s.serverDown, now)}`];
-		return { text: `hpc server down`, state: "error", column: rows, full: [...rows, "the MCP server stopped answering pings; /mcp"] };
-	}
 	// Warmth is trusted only as long as the idle window: after that the block may have been released
 	// and the server would not know either -- say so rather than count up a block that may be gone.
 	const stale = s.block === "warm" && s.at !== undefined && now - s.at >= IDLE_S * 1000;
@@ -169,24 +172,113 @@ export function describe(s: HpcState, now = Date.now()): { text: string; state: 
 		...(s.partition || s.account ? [`partition ${s.partition ?? "default"} · account ${s.account ?? "default"}`] : []),
 		...(spend ? [`spent ${spend} this session`] : []),
 		...(s.notice ? [s.notice] : []),
-		...(stale ? ["the next hpc_* call will re-check, and may restart the block"] : []),
-		...(spending ? ["release the block: hpc_stop_endpoint"] : []),
+		...(stale ? ["the next hpc call will re-check, and may restart the block"] : []),
+		...(spending ? [`release the block: ${prefix}stop_endpoint`] : []),
 	];
 	const head = spending ? `${facility} · ${block}` : `${facility} · ${status ?? "connected"}`;
 	return { text: `hpc ${head}`, state, column, full };
 }
 
-/** The bridge's tool prefix for the hpc-bridge server, from the same config it reads. */
-export function hpcServer(cwd: string): { name: string; prefix: string } | undefined {
-	let servers: ReturnType<typeof readConfig>;
+// ── the driving-hpc skill, from the installed plugin ─────────────────────────────────────────
+/** A YAML double-quoted scalar: the one form every parser reads the same way. */
+export const yamlString = (v: string): string => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
+/** The SKILL.md with its frontmatter re-emitted as quoted scalars; the body untouched. */
+export function skillText(body: string, name = "driving-hpc"): string {
+	const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(body);
+	if (!m) return `---\nname: ${yamlString(name)}\ndescription: ${yamlString("Operations guidance served by hpc-bridge")}\n---\n\n${body}`;
+	const fields: Record<string, string> = {};
+	for (const line of m[1].split(/\r?\n/)) {
+		const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
+		if (kv) fields[kv[1]] = kv[2].replace(/^["'](.*)["']$/, "$1");
+	}
+	fields.name ??= name;
+	fields.description ??= "Operations guidance served by hpc-bridge";
+	const head = Object.entries(fields).map(([k, v]) => `${k}: ${yamlString(v)}`).join("\n");
+	return `---\n${head}\n---\n${body.slice(m[0].length)}`;
+}
+
+/** uv's cache (UV_CACHE_DIR, else ~/.cache/uv), where uvx unpacks every version it has installed. */
+export const uvCacheDir = (): string => process.env.UV_CACHE_DIR || join(homedir(), ".cache", "uv");
+
+/** The newest hpc_bridge/_guidance/SKILL.md under uv's cache, or undefined before the server has ever run. */
+export function findPluginSkill(cacheDir = uvCacheDir()): string | undefined {
+	let best: { file: string; mtime: number } | undefined;
+	const walk = (dir: string, depth: number) => {
+		if (depth > 7) return;
+		let entries: import("node:fs").Dirent[];
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const e of entries) {
+			const path = join(dir, e.name);
+			if (e.isDirectory()) {
+				if (e.name === "hpc_bridge") {
+					const file = join(path, "_guidance", "SKILL.md");
+					if (existsSync(file)) {
+						const mtime = statSync(file).mtimeMs;
+						if (!best || mtime > best.mtime) best = { file, mtime };
+					}
+				} else if (!e.name.startsWith(".") && e.name !== "node_modules") walk(path, depth + 1);
+			}
+		}
+	};
+	walk(cacheDir, 0);
+	return best?.file;
+}
+
+/** Write the plugin's skill, frontmatter quoted, under the agent cache; returns the skill directory. */
+export function installSkill(agentDir: string, source: string | undefined): string | undefined {
+	if (!source) return undefined;
+	const dir = join(agentDir, "cache", "hpc-bridge", "driving-hpc");
+	const text = skillText(readFileSync(source, "utf8"));
+	const target = join(dir, "SKILL.md");
 	try {
-		servers = readConfig(cwd);
+		mkdirSync(dir, { recursive: true });
+		if (!existsSync(target) || readFileSync(target, "utf8") !== text) writeFileSync(target, text);
+		return dir;
 	} catch {
 		return undefined;
 	}
-	for (const [name, spec] of Object.entries(servers)) {
+}
+
+/** hpc-bridge's tools, for recognising the server when no mcp.json names it. */
+export const HPC_TOOLS = new Set([
+	"list_facilities", "connect_facility", "authenticate", "complete_login", "complete_preauth", "ensure_endpoint_up",
+	"run_shell", "poll_task", "reset_session", "login_shell", "stop_endpoint", "teardown_endpoint",
+]);
+
+type McpEntry = { command?: string; args?: string[]; url?: string };
+
+/** The `mcpServers` Pi reads: the agent directory's mcp.json, then the project's, which wins by name. */
+export function readMcpServers(cwd: string): Record<string, McpEntry> {
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	const out: Record<string, McpEntry> = {};
+	for (const file of [join(agentDir, "mcp.json"), join(cwd, ".pi", "mcp.json")]) {
+		if (!existsSync(file)) continue;
+		try {
+			const parsed = JSON.parse(readFileSync(file, "utf8")) as { mcpServers?: Record<string, McpEntry> };
+			for (const [name, entry] of Object.entries(parsed.mcpServers ?? {})) {
+				// a project entry with no command keeps the user-level one (it only overrides exposure)
+				if (entry && typeof entry === "object" && (entry.command || entry.url || !out[name])) out[name] = { ...out[name], ...entry };
+			}
+		} catch {
+			// a malformed file is Pi's to report; nothing to gate on here
+		}
+	}
+	return out;
+}
+
+/** Pi names MCP tools `mcp__<server>__<tool>`, with anything but letters, digits and _ replaced by _. */
+export const toolPrefix = (server: string): string => `mcp__${server.replace(/[^A-Za-z0-9_]/g, "_")}__`;
+
+/** The hpc-bridge server in mcp.json -- the one whose command mentions hpc-bridge -- and its tool prefix. */
+export function hpcServer(cwd: string): { name: string; prefix: string } | undefined {
+	for (const [name, spec] of Object.entries(readMcpServers(cwd))) {
 		const argv = [spec.command, ...(spec.args ?? [])].join(" ");
-		if (/hpc-bridge/.test(argv)) return { name, prefix: spec.prefix === false ? "" : `${spec.prefix ?? name}_` };
+		if (/hpc-bridge/.test(argv)) return { name, prefix: toolPrefix(name) };
 	}
 	return undefined;
 }
@@ -196,11 +288,17 @@ export default function (pi: ExtensionAPI): void {
 	let dead = false;
 	let state: HpcState = {};
 	const server = hpcServer(process.cwd());
-	const prefix = server?.prefix;
-	const hpcServerName = server?.name;
-	const tool = (base: string) => `${prefix ?? "hpc_"}${base}`;
-	const baseOf = (toolName: string): string | undefined =>
-		prefix !== undefined && toolName.startsWith(prefix) ? toolName.slice(prefix.length) : undefined;
+	const prefix = server?.prefix ?? "mcp__hpc__";
+	// the skill lives in uv's cache only once the server has been installed; until then there is nothing to advertise
+	const skillDir = server ? installSkill(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), findPluginSkill()) : undefined;
+	pi.on("resources_discover", () => (skillDir ? { skillPaths: [dirname(skillDir)] } : undefined));
+	/** The hpc-bridge tool behind a Pi tool name: the configured server's, or, with no config, any server serving hpc-bridge's tool set. */
+	const baseOf = (toolName: string): string | undefined => {
+		if (toolName.startsWith(prefix)) return toolName.slice(prefix.length);
+		if (server) return undefined;
+		const m = /^mcp__[A-Za-z0-9_]+__(.+)$/.exec(toolName);
+		return m && HPC_TOOLS.has(m[1]) ? m[1] : undefined;
+	};
 
 	const emit = (event: string, payload: unknown) => {
 		if (dead) return;
@@ -211,8 +309,8 @@ export default function (pi: ExtensionAPI): void {
 		}
 	};
 	const publish = () => {
-		const d = describe(state);
-		emit("statusbar:slot", { id: "hpc", text: d.text, state: d.state, statusKey: "hpc", details: () => describe(state).column });
+		const d = describe(state, Date.now(), prefix);
+		emit("statusbar:slot", { id: "hpc", text: d.text, state: d.state, statusKey: "hpc", details: () => describe(state, Date.now(), prefix).column });
 	};
 
 	pi.on("tool_call", async (event, ctx: ExtensionContext) => {
@@ -281,24 +379,17 @@ export default function (pi: ExtensionAPI): void {
 		publish();
 	});
 	pi.events.on("statusbar:ready", () => publish());
-	pi.events.on("mcp:server", (data) => {
-		const { name, up, since } = (data ?? {}) as { name?: string; up?: boolean; since?: number };
-		if (!name || !hpcServerName || name !== hpcServerName) return;
-		state = { ...state, serverDown: up ? undefined : (since ?? Date.now()) };
-		publish();
-	});
 	pi.on("session_shutdown", () => {
 		dead = true;
 	});
 
 	pi.registerCommand("hpc", {
-		description: "The hpc-bridge session: facility, block, spend. Tools are hpc_*; guidance is the driving-hpc skill",
+		description: "The hpc-bridge session: facility, block, spend. Tools are mcp__hpc__*; guidance is the driving-hpc skill; /mcp for the connection",
 		handler: async (_args, ctx) => {
 			if (dead) return;
-			const d = describe(state);
-			const guard = prefix === undefined ? "\n! no hpc-bridge server in mcp.json — /mcp" : "";
+			const d = describe(state, Date.now(), prefix);
+			const guard = server ? "" : "\n! no hpc-bridge server in mcp.json — /mcp lists what Pi connected";
 			ctx.ui.notify(`${d.text}\n${d.full.join("\n")}${guard}`, d.state === "error" ? "error" : d.state === "warn" ? "warning" : "info");
 		},
 	});
-	void tool; // the prefix helper is what /hpc's description refers to
 }

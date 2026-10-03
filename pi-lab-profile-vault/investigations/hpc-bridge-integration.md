@@ -1,6 +1,6 @@
 ---
 documented: 2026-09-22
-status: A + C built (extensions/mcp.ts) and B built (extensions/hpc-bridge.ts); all verified live. Open upstream ask: a read-only endpoint_status tool, so block liveness can be polled without spend
+status: A + C were built as extensions/mcp.ts and retired on 2026-10-03 when Pi 1.0 shipped MCP support of its own (same mcp.json, mcpServers key, tools named mcp__<server>__<tool>, resource tools, /mcp); B lives on in extensions/hpc-bridge.ts, which now also derives the driving-hpc skill from the uvx-installed plugin. Open upstream asks — a read-only endpoint_status tool; valid YAML in SKILL.md's frontmatter (or a package.json with pi.skills so `pi install git:…hpc-bridge` loads it natively)
 sources: hpc-bridge repo at ~/Projects/hpc-bridge (main, plugin 0.1.17), its vault, and the hpc-bridge Claude session's inventory; Pi 0.87.0 docs and types
 ---
 

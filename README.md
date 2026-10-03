@@ -56,7 +56,7 @@ The [setup guide](docs/setup-guide.md) has the long form of each step; §16 cove
 | `/open` | everything substantial from the session — reasoning, bash runs, diffs, writes — in full, in a picker; hand off to `$EDITOR` |
 | `/pin` | the pinned copy of your last message above the transcript, on/off |
 | `/images` | keep only the newest N images in context |
-| `/mcp` | MCP servers started for this session and their tools — Pi has no MCP of its own; this profile adds it |
+| `/mcp` | Pi's own (since 1.0): the servers in `mcp.json`, their state, tools and exposure |
 | `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
 | `/argo` · `/argo up` · `/argo down` · `/argo spend` · `/argo check` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status and this session's spend; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down`; argo-dash's usage report; probe which listed models actually answer and drop the ones that don't |
 
@@ -130,28 +130,31 @@ covers terminals and multiplexers that drop the markers: keys arriving faster th
 type (three inside 80 ms) are held and appended to the editor whole once the burst ends. Real
 bracketed pastes and key sequences pass through untouched.
 
-### MCP servers as tools
+### hpc-bridge: a supercomputer as tools, with a spend gate
 
-`extensions/mcp.ts` starts every server named in `~/.pi/agent/mcp.json` or a project `.pi/mcp.json`
-over stdio, registers its tools with Pi under `<server>_<tool>` using the server's own schemas, and
-turns any resource you name into a skill. The lab config ships
+Pi 1.0 connects MCP servers itself from `~/.pi/agent/mcp.json` (or a project `.pi/mcp.json`), names
+their tools `mcp__<server>__<tool>`, and owns `/mcp`. The lab config ships one server,
 [hpc-bridge](https://github.com/globus-labs/hpc-bridge) — drive a supercomputer from the session:
 find a facility, log in to Globus once, start a billed block, run commands on it, release it. It
 needs `uv` on `PATH`; the Globus Labs cluster is in its public registry as a multi-user endpoint, so
-it attaches with no SSH. `extensions/hpc-bridge.ts` adds what the plugin has on no host: a billed
-block is started only after you confirm it in a dialog naming the facility, partition and account
-(headless sessions cannot start one), inline credentials are refused on the shell tools, and the
-column shows the facility, block state and spend while connected.
+it attaches with no SSH.
 
 ```json
-{ "servers": { "hpc": { "command": "uvx", "args": ["--from", "git+https://github.com/globus-labs/hpc-bridge", "hpc-bridge"],
-                        "skills": [{ "uri": "hpcbridge://guidance/operations", "name": "driving-hpc" }] } } }
+{ "mcpServers": { "hpc": { "command": "uvx", "args": ["--from", "git+https://github.com/globus-labs/hpc-bridge", "hpc-bridge"],
+                           "exposure": "direct", "timeout": 180 } } }
 ```
+
+`extensions/hpc-bridge.ts` adds what the plugin has on no host: a billed block is started only
+after you confirm it in a dialog naming the facility, partition and account (headless sessions
+cannot start one), inline credentials are refused on the shell tools, and the column shows the
+facility, block state and spend while connected. The plugin's own `driving-hpc` guidance is loaded
+as a skill from the installed package — nothing is copied into this repository; a new hpc-bridge
+release reaches the skill the next time `uvx` installs it.
 
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · outputs · mcp · hpc-bridge · argo · paste-guard · code-panels · image-window
+extensions/     statusbar · fleet · rounds · endpoints · outputs · hpc-bridge · argo · paste-guard · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
 profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), mcp.json (hpc-bridge), bin helpers
 profiles/example/  a rounds.json template
@@ -192,8 +195,7 @@ ln -sf "$PWD"/agents/{dev,reviewer,critic}.md ~/.pi/agent/agents/
 ln -sf "$PWD"/profiles/lab/rounds.json ~/.pi/agent/rounds.json
 ```
 
-On a fresh clone, `npm ci` first (the MCP bridge has a runtime dependency; `pi install` does this
-for users). Then edit → `scripts/check.sh` → `/reload` → it is live. Commit and push to publish.
+Edit → `scripts/check.sh` → `/reload` → it is live. Commit and push to publish.
 
 The catch is that a broken edit breaks your running Pi, because there is no staging copy — so run
 the guard *before* reloading, not after. To check what a stranger actually gets, install the

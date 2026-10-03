@@ -1,7 +1,7 @@
 {
   "name": "pi-lab-profile",
   "version": "0.1.0",
-  "description": "A Pi profile: right-hand status column, an interactive subagent fleet you can attach to, dev \u2192 review \u2192 critique rounds across separate inference endpoints, and MCP servers as Pi tools.",
+  "description": "A Pi profile: right-hand status column, an interactive subagent fleet you can attach to, dev \u2192 review \u2192 critique rounds across separate inference endpoints, Argo and ALCF as providers, and an enforced spend gate for hpc-bridge.",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -12,6 +12,7 @@
     "extensions",
     "agents",
     "profiles",
+    "skills",
     "scripts",
     "docs",
     "README.md"
@@ -26,22 +27,20 @@
       "./extensions/image-window.ts",
       "./extensions/outputs.ts",
       "./extensions/paste-guard.ts",
-      "./extensions/mcp.ts",
       "./extensions/hpc-bridge.ts",
       "./extensions/argo.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.86.0",
-    "@earendil-works/pi-coding-agent": ">=0.86.0",
-    "@earendil-works/pi-tui": ">=0.86.0",
-    "typebox": "*"
+    "@earendil-works/pi-ai": ">=1.0.0",
+    "@earendil-works/pi-coding-agent": ">=1.0.0",
+    "@earendil-works/pi-tui": ">=1.0.0"
   },
   "scripts": {
     "check": "bash scripts/check.sh",
     "test": "node --test tests/*.test.ts tests/*.test.mjs"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }
