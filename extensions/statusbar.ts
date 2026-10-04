@@ -370,6 +370,7 @@ export default function (pi: ExtensionAPI): void {
 		const sections: [string, string[]][] = [
 			["ENDPOINT", ep?.details?.() ?? [ep?.text ?? "unknown"]],
 			["AGENTS", slots.get("agents")?.details?.() ?? ["none running"]],
+			["LIVENESS", slots.get("liveness")?.details?.() ?? ["no verdict yet — /stuck"]],
 			["HPC", slots.get("hpc")?.details?.() ?? ["no facility connected"]],
 			[
 				"TOTAL",
@@ -782,6 +783,11 @@ export default function (pi: ExtensionAPI): void {
 				running ? `${running} running` : t.fg("dim", "none running"),
 				...(running ? agentRows.slice(0, 3).map((row) => t.fg("dim", row.replace(/^[●✓] /, ""))) : []),
 			]);
+
+			// liveness.ts only: "is this stuck?" -- shown only once a wait has outgrown what that wait
+			// usually takes, so a healthy session never sees the row at all
+			const lv = slots.get("liveness");
+			if (lv && lv.state !== "idle") section("LIVENESS", lv.state as SlotState, lv.details?.() ?? [lv.text]);
 
 			const ep = slots.get("endpoint");
 			const host = (() => {

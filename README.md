@@ -56,6 +56,7 @@ The [setup guide](docs/setup-guide.md) has the long form of each step; §16 cove
 | `/open` | everything substantial from the session — reasoning, bash runs, diffs, writes — in full, in a picker; hand off to `$EDITOR` |
 | `/pin` | the pinned copy of your last message above the transcript, on/off |
 | `/images` | keep only the newest N images in context |
+| `/stuck` | is anything stuck? every agent's phase, how long since progress, and what that wait usually takes — measured, with the slow and stalled lines it is judged against |
 | `/mcp` | Pi's own (since 1.0): the servers in `mcp.json`, their state, tools and exposure |
 | `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
 | `/argo` · `/argo up` · `/argo down` · `/argo spend` · `/argo check` | Argonne's Argo gateway (frontier models, metered) through argo-tools' tunnel: status and this session's spend; run `argo-up` with the Duo prompt relayed into the chat; run `argo-down`; argo-dash's usage report; probe which listed models actually answer and drop the ones that don't |
@@ -122,6 +123,19 @@ streaming it returns nothing at all, which Pi reports as "stream ended without a
 The profile says so once when it happens, and `/argo check` probes every Claude model with a
 one-token request — metered, so only on request — and drops the dead ones from `/model`.
 
+### Is it stuck?
+
+`extensions/liveness.ts` answers that for the session and every subagent. An agent is always in
+a phase — waiting for a first token, streaming, running a tool, waiting for you, waiting on a
+subagent, queued — and each phase is judged against what *that* wait usually takes: `slow` past
+twice its p95, `stalled` past twice its p99, with floors. The usual times are measured (priors
+from 427 recorded sessions, then learned per tool and endpoint and kept in
+`~/.pi/agent/cache/liveness.json`), and `scripts/liveness-replay.mjs` reports the false-alarm
+rate those lines would have had on your own history (bash: 0.6% of runs, and the ones it names
+are the hangs). A `LIVENESS` row appears in the column only when something is slow or stalled,
+fleet's rows carry `⏳`/`⚠` marks, `/stuck` lays out the evidence, and a stall is said once.
+Nothing is aborted on your behalf.
+
 ### Pasting into Pi
 
 Pi's editor needs the terminal to bracket a paste (`ESC[200~ … ESC[201~`); without that the first
@@ -154,7 +168,7 @@ release reaches the skill the next time `uvx` installs it.
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · outputs · hpc-bridge · argo · paste-guard · code-panels · image-window
+extensions/     statusbar · fleet · rounds · endpoints · outputs · hpc-bridge · argo · paste-guard · liveness · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
 profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), mcp.json (hpc-bridge), bin helpers
 profiles/example/  a rounds.json template

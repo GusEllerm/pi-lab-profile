@@ -18,7 +18,8 @@ A Pi profile that adds four things to a stock Pi session:
 | **Review rounds** | dev → review panel → critic, deliberately spread across different clusters and models so the reviewers are not the dev — [[extensions/rounds]] |
 | **An output picker** | `/open` lists reasoning, bash runs, diffs and writes from the session, in full — [[extensions/outputs]] |
 
-Plus [[extensions/hpc-bridge]] (an enforced spend gate and an HPC row for the hpc-bridge MCP server
+Plus [[extensions/liveness]] ("is this agent stuck?" — a measured verdict per agent, `/stuck`),
+[[extensions/hpc-bridge]] (an enforced spend gate and an HPC row for the hpc-bridge MCP server
 the lab config ships; Pi 1.0 connects MCP servers itself — the bridge this profile carried until
 3 Oct 2026 is gone), [[extensions/argo]] (Argonne's
 Argo gateway as providers, with the Duo prompt relayed into the chat),

@@ -27,6 +27,7 @@
       "./extensions/image-window.ts",
       "./extensions/outputs.ts",
       "./extensions/paste-guard.ts",
+      "./extensions/liveness.ts",
       "./extensions/hpc-bridge.ts",
       "./extensions/argo.ts"
     ],

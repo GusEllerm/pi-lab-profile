@@ -412,11 +412,27 @@ export default function (pi: ExtensionAPI): void {
 			const label = isSelected ? theme.fg("text", name) : theme.fg(finished ? "dim" : "muted", name);
 			const kind = theme.fg("dim", a.type);
 			out.push(fit(`${branch} ${glyph} ${kind} ${label}  ${theme.fg("dim", stats.join(" · "))}`));
-			const activity = finished ? undefined : oneLine(info?.activity || "thinking…", Math.max(20, width - 8));
-			if (activity) out.push(fit(`${theme.fg("dim", i === list.length - 1 ? "     ⎿ " : "│    ⎿ ")}${theme.fg("dim", activity)}`));
+			// liveness.ts's verdict for this agent, when it has one worth a word: slow, stalled, looping
+			const mark = finished ? undefined : liveness.get(a.id);
+			const flag = mark && mark.level !== "ok" && mark.level !== "waiting" ? `${mark.level === "slow" ? "⏳" : "⚠"} ${mark.level} · ${mark.summary}` : undefined;
+			const activity = finished ? undefined : oneLine(info?.activity || "thinking…", Math.max(20, width - 8 - (flag ? flag.length + 3 : 0)));
+			if (activity)
+				out.push(
+					fit(
+						`${theme.fg("dim", i === list.length - 1 ? "     ⎿ " : "│    ⎿ ")}${theme.fg("dim", activity)}${flag ? `  ${theme.fg(mark.level === "slow" ? "warning" : "error", flag)}` : ""}`,
+					),
+				);
 		});
 		return out;
 	}
+
+	/** Per-agent verdicts from liveness.ts, refreshed every couple of seconds while anything runs. */
+	const liveness = new Map<string, { level: string; summary: string }>();
+	pi.events.on("liveness:agents", (data) => {
+		liveness.clear();
+		for (const [id, v] of Object.entries((data ?? {}) as Record<string, { level: string; summary: string }>)) liveness.set(id, v);
+		rerender();
+	});
 
 	const endpointLabels = new Map<string, string>();
 	pi.events.on("statusbar:endpoint-labels", (data) => {
@@ -455,7 +471,9 @@ export default function (pi: ExtensionAPI): void {
 								info?.contextPercent != null ? `${Math.round(info.contextPercent)}%` : undefined,
 								a.endedAt ? secs(a.durationMs ?? 0) : secs(Date.now() - a.startedAt),
 							].filter(Boolean);
-							return `${a.endedAt ? "✓" : "●"} ${oneLine(a.description || a.type, 28)} · ${bits.join(" · ")}`;
+							const mark = a.endedAt ? undefined : liveness.get(a.id);
+							const flag = mark && mark.level !== "ok" && mark.level !== "waiting" ? ` · ${mark.level === "slow" ? "⏳" : "⚠"} ${mark.level}` : "";
+							return `${a.endedAt ? "✓" : "●"} ${oneLine(a.description || a.type, 28)} · ${bits.join(" · ")}${flag}`;
 						})
 					: ["none running"],
 		});
