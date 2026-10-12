@@ -377,13 +377,15 @@ Create `~/.pi/agent/pi-cc-extensions.json` (pi-cc ≥ 0.9 reads this name; it mi
 `claude-code-style.json` and deletes it). `previewLines: 0` collapses thinking to a single line —
 the default is a rolling 3-line preview. The other two keys turn off pi-cc's own footer and sticky
 prompt row, which Part 2's status column and pin bar replace; with them on, two footers and two
-pinned prompts compete for the same rows:
+pinned prompts compete for the same rows. The last key hands the startup header to Part 2's
+`header.ts`, which draws it from `~/.pi/agent/header.json` (`scripts/install.sh lab` installs one):
 
 ```json
 {
   "previewLines": 0,
   "enableCustomFooter": false,
-  "stickyUserMessage": false
+  "stickyUserMessage": false,
+  "showStartupHeader": false
 }
 ```
 

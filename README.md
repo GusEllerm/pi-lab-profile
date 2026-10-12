@@ -56,6 +56,7 @@ The [setup guide](docs/setup-guide.md) has the long form of each step; §16 cove
 | `/open` | everything substantial from the session — reasoning, bash runs, diffs, writes — in full, in a picker; hand off to `$EDITOR` |
 | `/pin` | the pinned copy of your last message above the transcript, on/off |
 | `/images` | keep only the newest N images in context |
+| `/header` · `/header reload` · `/header init` | the startup header, from `~/.pi/agent/header.json` (or a project's `.pi/header.json`): edit the file, then reload |
 | `/stuck` | is anything stuck? every agent's phase, how long since progress, and what that wait usually takes — measured, with the slow and stalled lines it is judged against |
 | `/mcp` | Pi's own (since 1.0): the servers in `mcp.json`, their state, tools and exposure |
 | `/hpc` | the hpc-bridge session: facility, block, spend. A billed block needs your confirmation in a dialog; headless sessions cannot start one |
@@ -123,6 +124,33 @@ streaming it returns nothing at all, which Pi reports as "stream ended without a
 The profile says so once when it happens, and `/argo check` probes every Claude model with a
 one-token request — metered, so only on request — and drops the dead ones from `/model`.
 
+### Your own header
+
+The block Pi opens with — logo, version, key hints, a tagline — comes from a file:
+`~/.pi/agent/header.json`, or a project's `.pi/header.json`, which wins (handy for a demo
+directory). Edit it and run `/header reload`; `/header init` writes a starter if you have none.
+
+```json
+{
+  "art": ["██████  ", "██  ██  ", "████  ██", "██    ██"],
+  "artStyle": "accent",
+  "lines": [
+    "{bold:{accent:pi}} {dim:v{version}}",
+    "{hints}",
+    "{muted:model} {model} {muted:via} {endpoint}",
+    "",
+    "{accent:Globus Labs demo · {date}}"
+  ]
+}
+```
+
+`{style:text}` styles text with any theme colour (`accent`, `muted`, `dim`, `mdLink`, `success`,
+…) or `bold`/`italic`, and nests. `{version}` `{model}` `{provider}` `{endpoint}` `{thinking}`
+`{cwd}` `{branch}` `{user}` `{host}` `{date}` are live values; `{hints}` is Pi's key-hint line from
+your own keybindings. `\{` and `\}` are literal braces (`"\\{"` inside a JSON string). The art sits left of the lines and moves
+above them on a narrow terminal. pi-cc's own header must be off (`"showStartupHeader": false` in
+`pi-cc-extensions.json`) — it is set after this one and would win; `/header` says so if it is on.
+
 ### Is it stuck?
 
 `extensions/liveness.ts` answers that for the session and every subagent. An agent is always in
@@ -168,7 +196,7 @@ release reaches the skill the next time `uvx` installs it.
 ## Layout
 
 ```
-extensions/     statusbar · fleet · rounds · endpoints · outputs · hpc-bridge · argo · paste-guard · liveness · code-panels · image-window
+extensions/     statusbar · header · fleet · rounds · endpoints · outputs · hpc-bridge · argo · paste-guard · liveness · code-panels · image-window
 agents/         dev · reviewer · critic — no model pins, portable
 profiles/lab/   one lab's setup: models.json (SSH-tunnelled vLLM + ALCF gateway), mcp.json (hpc-bridge), bin helpers
 profiles/example/  a rounds.json template

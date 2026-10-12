@@ -1,0 +1,17 @@
+{
+  "_comment": "The startup header (extensions/header.ts). Edit, then /header reload. Styles: {accent:…} {muted:…} {dim:…} {bold:…} {mdLink:…} or any theme colour; values: {version} {model} {endpoint} {thinking} {cwd} {branch} {user} {host} {date} {hints}. A project's .pi/header.json overrides this one.",
+  "art": [
+    "██████  ",
+    "██  ██  ",
+    "████  ██",
+    "██    ██"
+  ],
+  "artStyle": "accent",
+  "lines": [
+    "{bold:{accent:pi}} {dim:v{version}}",
+    "{hints}",
+    "{muted:model} {model} {muted:via} {endpoint}",
+    "",
+    "{accent:There are many agent harnesses, but this one is {bold:{mdLink:yours}}.}"
+  ]
+}

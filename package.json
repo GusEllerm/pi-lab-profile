@@ -19,6 +19,7 @@
   "pi": {
     "extensions": [
       "./extensions/statusbar.ts",
+      "./extensions/header.ts",
       "./extensions/fleet.ts",
       "./extensions/rounds.ts",
       "./extensions/endpoints.ts",
