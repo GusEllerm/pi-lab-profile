@@ -1,6 +1,6 @@
 ---
 source: extensions/liveness.ts
-source-hash: 5528e7834b9a2408455607ece15fdb462df10f8c
+source-hash: 55e0ac5796878f39c465ffb4b7a7e0c84ae5133b
 documented: 2026-10-04
 ---
 
@@ -89,7 +89,7 @@ ceiling, with a one-minute floor so a shared GPU's queue is not an alarm.
 - **Fleet's rows**: each running agent carries `⏳ slow · …` or `⚠ stalled · …` after its activity
   line, from the `liveness:agents` event, and the agents slot rows carry the same mark.
 - **`/stuck`**: every agent — phase, wait, the usual times with their source (learned/prior/default),
-  the slow and stalled lines — and what to do: steer with `@name`, stop with `x` in the list,
+  the slow and stalled lines — and what to do: steer with `@name` or `s` on its row, stop through `/agents` → the agent → `x` (pi-subagents' viewer; fleet has no stop key),
   `/argo check` for an Argo model that answers nothing.
 - **One notification per episode** when something turns stalled or looping; cleared when it
   recovers, so a long stall is said once, not every two seconds.

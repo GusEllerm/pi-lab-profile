@@ -516,7 +516,7 @@ export default function (pi: ExtensionAPI): void {
 				lines.push(`${a.name}: ${av.level} · ${av.summary}`, ...av.evidence.map((e) => `  ${e}`));
 			}
 			if (!agents.size) lines.push("no subagents running");
-			lines.push("stalled = past twice the worst of a hundred normal waits · steer: @name … · stop: x in the agent list · /argo check if an Argo model answers nothing");
+			lines.push("stalled = past twice the worst of a hundred normal waits · steer: @name … or s on its row · stop: /agents → the agent → x · /argo check if an Argo model answers nothing");
 			const worst = [v, ...[...agents.values()].map((a) => a.model.verdict(now))].some((x) => x.level === "stalled" || x.level === "looping");
 			ctx.ui.notify(lines.join("\n"), worst ? "warning" : "info");
 		},
