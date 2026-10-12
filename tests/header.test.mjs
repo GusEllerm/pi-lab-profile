@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { STARTER, gitBranch, headerPath, layout, readHeader, renderMarkup } from "../extensions/header.ts";
+import { readFileSync } from "node:fs";
+import { STARTER, gitBranch, headerPath, hexColor, layout, readHeader, renderMarkup } from "../extensions/header.ts";
 
 // a theme that shows what was styled, so the tests can read it
 const theme = {
@@ -91,3 +92,40 @@ test("the branch comes from .git/HEAD without a subprocess", () => {
 		rmSync(repo, { recursive: true, force: true });
 	}
 });
+
+test("hex colours: #rrggbb in the markup and per-row art colours, the last repeating", () => {
+	assert.equal(hexColor("#2a78d6", "x"), "\x1b[38;2;42;120;214mx\x1b[39m");
+	assert.equal(hexColor("blue", "x"), undefined);
+	assert.equal(renderMarkup("{#1baf7a:aqua}", {}, theme), "\x1b[38;2;27;175;122maqua\x1b[39m");
+	const rows = layout({ art: ["A", "B", "C"], artColors: ["#000001", "#000002"], layout: "stacked", lines: ["x"] }, {}, theme, 80);
+	assert.deepEqual(rows.slice(1, 4), ["\x1b[38;2;0;0;1mA\x1b[39m", "\x1b[38;2;0;0;2mB\x1b[39m", "\x1b[38;2;0;0;2mC\x1b[39m"]);
+	assert.deepEqual(rows.slice(4), ["", "x", ""], "stacked: a blank row, then the lines");
+	assert.match(readHeader(writeTmp({ art: ["a"], artColors: "red" })).error, /"artColors" must be an array/);
+	assert.match(readHeader(writeTmp({ layout: "sideways" })).error, /"layout" must be "beside" or "stacked"/);
+});
+
+test("art wider than the terminal is left out, never cut mid-letter", () => {
+	const cfg = { art: ["x".repeat(54)], layout: "stacked", lines: ["the lines still show"] };
+	assert.equal(layout(cfg, {}, theme, 80).length, 5);
+	assert.deepEqual(layout(cfg, {}, theme, 40), ["", "the lines still show", ""]);
+});
+
+test("the lab header: the cluster banner's wordmark and gradient, with HARNESS for CLUSTER", () => {
+	const lab = JSON.parse(readFileSync(new URL("../profiles/lab/header.json", import.meta.url), "utf8"));
+	assert.equal(readHeader(new URL("../profiles/lab/header.json", import.meta.url).pathname).error, undefined);
+	assert.equal(lab.art.length, 7);
+	assert.equal(lab.art[6].trim(), "H  A  R  N  E  S  S");
+	assert.equal(lab.artColors[0], "#2a78d6", "cluster blue, as the MOTD's first row");
+	assert.equal(lab.artColors.at(-1), "#1baf7a", "aqua, as its last");
+	const width = Math.max(...lab.art.map((r) => [...r].length));
+	assert.ok(width <= 60, `the wordmark is ${width} columns, so it fits a transcript beside the status column`);
+	const rows = layout(lab, { version: "1.1.0", model: "m", endpoint: "e", hints: "H" }, theme, 100);
+	assert.ok(rows.some((r) => r.includes("H  A  R  N  E  S  S")));
+});
+
+function writeTmp(obj) {
+	const dir = mkdtempSync(join(tmpdir(), "hdr-tmp-"));
+	const file = join(dir, "header.json");
+	writeFileSync(file, JSON.stringify(obj));
+	return file;
+}

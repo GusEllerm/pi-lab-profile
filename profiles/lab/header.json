@@ -1,17 +1,26 @@
 {
-  "_comment": "The startup header (extensions/header.ts). Edit, then /header reload. Styles: {accent:…} {muted:…} {dim:…} {bold:…} {mdLink:…} or any theme colour; values: {version} {model} {endpoint} {thinking} {cwd} {branch} {user} {host} {date} {hints}. A project's .pi/header.json overrides this one.",
+  "_comment": "The startup header (extensions/header.ts). The wordmark and its blue->aqua gradient are the Globus cluster's login banner (globus-admin roles/motd/templates/00-globus-banner.j2), with HARNESS for CLUSTER. Edit, then /header reload. Styles: {accent:…} {muted:…} {dim:…} {bold:…} {#rrggbb:…} or any theme colour; values: {version} {model} {endpoint} {thinking} {cwd} {branch} {user} {host} {date} {hints}. A project's .pi/header.json overrides this one.",
   "art": [
-    "██████  ",
-    "██  ██  ",
-    "████  ██",
-    "██    ██"
+    " ██████╗ ██╗      ██████╗ ██████╗ ██╗   ██╗███████╗",
+    "██╔════╝ ██║     ██╔═══██╗██╔══██╗██║   ██║██╔════╝",
+    "██║  ███╗██║     ██║   ██║██████╔╝██║   ██║███████╗",
+    "██║   ██║██║     ██║   ██║██╔══██╗██║   ██║╚════██║",
+    "╚██████╔╝███████╗╚██████╔╝██████╔╝╚██████╔╝███████║",
+    " ╚═════╝ ╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚══════╝",
+    "                H  A  R  N  E  S  S"
   ],
-  "artStyle": "accent",
+  "artColors": [
+    "#2a78d6",
+    "#2783c4",
+    "#248eb1",
+    "#21999f",
+    "#1ea48c",
+    "#1baf7a",
+    "#1baf7a"
+  ],
+  "layout": "stacked",
   "lines": [
-    "{bold:{accent:pi}} {dim:v{version}}",
-    "{hints}",
-    "{muted:model} {model} {muted:via} {endpoint}",
-    "",
-    "{accent:There are many agent harnesses, but this one is {bold:{mdLink:yours}}.}"
+    "  {bold:pi} {dim:v{version}} {dim:·} {model} {dim:via} {endpoint}",
+    "  {hints}"
   ]
 }

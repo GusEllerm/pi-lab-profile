@@ -145,7 +145,10 @@ directory). Edit it and run `/header reload`; `/header init` writes a starter if
 ```
 
 `{style:text}` styles text with any theme colour (`accent`, `muted`, `dim`, `mdLink`, `success`,
-…) or `bold`/`italic`, and nests. `{version}` `{model}` `{provider}` `{endpoint}` `{thinking}`
+…), a `#rrggbb` colour, or `bold`/`italic`, and nests. `artColors` colours the art row by row (a
+gradient), and `"layout": "stacked"` puts wide art above the lines; art wider than the terminal is
+left out rather than cut. The lab profile's header is the Globus cluster's login wordmark — same
+glyphs, same blue-to-aqua gradient — reading **GLOBUS HARNESS**. `{version}` `{model}` `{provider}` `{endpoint}` `{thinking}`
 `{cwd}` `{branch}` `{user}` `{host}` `{date}` are live values; `{hints}` is Pi's key-hint line from
 your own keybindings. `\{` and `\}` are literal braces (`"\\{"` inside a JSON string). The art sits left of the lines and moves
 above them on a narrow terminal. pi-cc's own header must be off (`"showStartupHeader": false` in

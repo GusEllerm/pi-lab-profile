@@ -20,7 +20,8 @@
  *   }
  *
  * Styles are the theme's colour names (accent, muted, dim, text, success, warning, error, mdLink,
- * …) plus bold and italic. Values: {version} {model} {provider} {endpoint} {thinking} {cwd}
+ * …), `#rrggbb`, and bold and italic. `artColors` colours the art row by row (a gradient down a
+ * wordmark), and `"layout": "stacked"` puts wide art above the lines instead of beside them. Values: {version} {model} {provider} {endpoint} {thinking} {cwd}
  * {branch} {user} {host} {date} {hints}. \{ and \} are literal braces ("\\{" in a JSON string).
  *
  * pi-cc-extensions draws its own header and sets it after this one, so it must be off
@@ -34,7 +35,17 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-c
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-export type HeaderConfig = { art?: string[]; artStyle?: string; lines?: string[]; gap?: number };
+export type HeaderConfig = {
+	art?: string[];
+	/** one theme colour for the whole art */
+	artStyle?: string;
+	/** per-row colours, `#rrggbb` or theme names; the last repeats -- a gradient down a wordmark */
+	artColors?: string[];
+	/** "beside": art left of the lines (narrow terminals stack); "stacked": art above, always */
+	layout?: "beside" | "stacked";
+	lines?: string[];
+	gap?: number;
+};
 export type Values = Record<string, string>;
 type Style = { fg(name: string, text: string): string; bold(text: string): string; italic?(text: string): string };
 
@@ -61,8 +72,28 @@ export function readHeader(file: string): { config?: HeaderConfig; error?: strin
 	if (c.art !== undefined && !strings(c.art)) return { error: `${file}: "art" must be an array of strings` };
 	if (c.artStyle !== undefined && typeof c.artStyle !== "string") return { error: `${file}: "artStyle" must be a theme colour name` };
 	if (c.gap !== undefined && (typeof c.gap !== "number" || c.gap < 0)) return { error: `${file}: "gap" must be a number of columns` };
+	if (c.artColors !== undefined && !strings(c.artColors)) return { error: `${file}: "artColors" must be an array of #rrggbb or theme colour names` };
+	if (c.layout !== undefined && c.layout !== "beside" && c.layout !== "stacked") return { error: `${file}: "layout" must be "beside" or "stacked"` };
 	return { config: c as HeaderConfig };
 }
+
+/** `#rrggbb` as a 24-bit foreground colour; the reset is the default-foreground code, so it nests. */
+export function hexColor(hex: string, text: string): string | undefined {
+	const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+	if (!m) return undefined;
+	return `\x1b[38;2;${parseInt(m[1], 16)};${parseInt(m[2], 16)};${parseInt(m[3], 16)}m${text}\x1b[39m`;
+}
+
+/** A colour that is either `#rrggbb` or a theme name; unknown names draw plain. */
+const colour = (theme: Style, name: string, text: string): string => {
+	const hex = hexColor(name, text);
+	if (hex !== undefined) return hex;
+	try {
+		return theme.fg(name, text);
+	} catch {
+		return text;
+	}
+};
 
 /**
  * The markup: `{style:text}` styles its text (nestable), `{name}` is a value, `\{` and `\}` are
@@ -74,11 +105,7 @@ export function renderMarkup(src: string, values: Values, theme: Style): string 
 	const apply = (style: string, text: string): string => {
 		if (style === "bold") return theme.bold(text);
 		if (style === "italic") return theme.italic ? theme.italic(text) : text;
-		try {
-			return theme.fg(style, text);
-		} catch {
-			return text;
-		}
+		return colour(theme, style, text);
 	};
 	const parse = (inner: boolean): string => {
 		let out = "";
@@ -91,7 +118,7 @@ export function renderMarkup(src: string, values: Values, theme: Style): string 
 				i++;
 				return out;
 			} else if (ch === "{") {
-				const m = /^\{([A-Za-z][\w-]*)(:|\})/.exec(src.slice(i));
+				const m = /^\{([A-Za-z][\w-]*|#[0-9a-fA-F]{6})(:|\})/.exec(src.slice(i));
 				if (!m) {
 					out += ch;
 					i++;
@@ -112,28 +139,28 @@ export function renderMarkup(src: string, values: Values, theme: Style): string 
 	return parse(false);
 }
 
-/** The header's rows at a width: art beside the lines when there is room, stacked when not. */
+/**
+ * The header's rows at a width. "beside" puts the art left of the lines and stacks them on a
+ * narrow terminal; "stacked" always puts the art on top. Art wider than the terminal is left out
+ * rather than cut mid-letter, so a wordmark never reads as garbage -- the lines still show.
+ */
 export function layout(config: HeaderConfig, values: Values, theme: Style, width: number): string[] {
 	const lines = (config.lines ?? []).map((l) => renderMarkup(l, values, theme));
-	const art = config.art ?? [];
-	const artWidth = Math.max(0, ...art.map((l) => visibleWidth(l)));
-	const paint = (l: string) => {
-		try {
-			return theme.fg(config.artStyle ?? "accent", l);
-		} catch {
-			return l;
-		}
-	};
+	const artWidth = Math.max(0, ...(config.art ?? []).map((l) => visibleWidth(l)));
+	const art = artWidth <= width ? (config.art ?? []) : [];
+	const colours = config.artColors?.length ? config.artColors : undefined;
+	const paint = (l: string, row: number) => colour(theme, colours ? colours[Math.min(row, colours.length - 1)] : (config.artStyle ?? "accent"), l);
 	const gap = config.gap ?? 2;
 	const fit = (l: string) => truncateToWidth(l, Math.max(1, width), "");
 	if (!art.length) return ["", ...lines, ""].map(fit);
-	if (width < artWidth + gap + 24) return ["", ...art.map(paint), "", ...lines, ""].map(fit);
+	if (config.layout === "stacked" || width < artWidth + gap + 24)
+		return ["", ...art.map(paint), ...(lines.length ? ["", ...lines] : []), ""].map(fit);
 	const rows = Math.max(art.length, lines.length);
 	const top = Math.floor((rows - art.length) / 2);
 	const out: string[] = [""];
 	for (let r = 0; r < rows; r++) {
 		const a = art[r - top] ?? "";
-		const left = a ? paint(a) + " ".repeat(Math.max(0, artWidth - visibleWidth(a))) : " ".repeat(artWidth);
+		const left = a ? paint(a, r - top) + " ".repeat(Math.max(0, artWidth - visibleWidth(a))) : " ".repeat(artWidth);
 		out.push(fit(`${left}${" ".repeat(gap)}${lines[r] ?? ""}`));
 	}
 	out.push("");

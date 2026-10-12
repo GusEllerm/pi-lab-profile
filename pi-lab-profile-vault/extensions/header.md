@@ -1,6 +1,6 @@
 ---
 source: extensions/header.ts
-source-hash: 2e0b6819cc9f8dbbafe14c1372859939b7a9e29f
+source-hash: 9531e0e2f9d4088192b2b8dff070b22cf79203b8
 documented: 2026-10-12
 ---
 
@@ -30,6 +30,17 @@ offers only `showStartupHeader` on/off. Pi's extension API replaces the header w
   visible where it is.
 - **The layout.** `layout`: art in the left column, lines beside it, vertically centred, one blank
   row above and below; under `artWidth + gap + 24` columns the art moves above the lines.
+- **Colours and layout** (12 Oct 2026, for the lab wordmark). `#rrggbb` works wherever a colour
+  does (`hexColor`: a 24-bit foreground with a default-foreground reset, so it nests);
+  `artColors` colours the art row by row, the last repeating; `"layout": "stacked"` puts the art
+  above the lines (the default `"beside"` still stacks under `artWidth + gap + 24` columns). Art
+  wider than the terminal is dropped, not truncated — a wordmark cut mid-letter reads as noise.
+- **The lab header** (`profiles/lab/header.json`) is the Globus cluster's login banner from
+  `globus-admin/roles/motd/templates/00-globus-banner.j2`: the six-row "ANSI Shadow" GLOBUS
+  wordmark and its gradient `42;120;214` → `27;175;122` (the Grafana dashboards' two hues), with
+  `H  A  R  N  E  S  S` in place of `C  L  U  S  T  E  R` — the same 19 characters, so it sits where
+  the original did. The rows and colours were copied from the template programmatically, not
+  retyped; a test pins the subtitle, the end colours and the width (51 columns).
 - **`/header`** (status, the style and value lists, a warning if pi-cc's header is on),
   **`/header reload`** (re-read after an edit), **`/header init`** (write the starter, which
   reproduces the old header, to `<agent-dir>/header.json` if absent), **`/header off`**.
