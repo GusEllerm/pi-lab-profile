@@ -9,7 +9,8 @@
 # that takes the whole session down, and a stale binding reads exactly like a memory leak.
 set -uo pipefail
 parse_only=0
-dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../extensions" && pwd)"
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+dir="$repo/extensions"
 for arg in "$@"; do
 	case "$arg" in
 		--parse-only) parse_only=1 ;;
@@ -25,6 +26,20 @@ for f in *.ts; do
 	out=$(node --no-warnings -e "import('./$f').catch(e=>{const m=e.message.split('\n')[0]; if(!/Cannot find package '@earendil-works|MODULE_TYPELESS/.test(m)){console.log('PARSE FAIL: '+m); process.exit(1)}})" 2>&1)
 	if [ -n "$out" ]; then echo "$f: $out"; fail=1; else echo "$f: parses"; fi
 done
+
+# The lockfile must match package.json, or CI's `npm ci` refuses before running a single test.
+# 12 Oct 2026: the peer range moved to >=1.1.0 without regenerating the lock, every local check
+# passed (they never run npm ci), and four pushes failed in CI. `npm ci --dry-run` is the same
+# validation, offline-cheap. Fix with: npm install --package-lock-only --ignore-scripts
+if [ "$dir" = "$repo/extensions" ] && [ -f "$repo/package-lock.json" ]; then
+	if lock=$(cd "$repo" && npm ci --omit=dev --dry-run --ignore-scripts --no-audit --no-fund 2>&1 >/dev/null); then
+		echo "lockfile: in sync with package.json"
+	else
+		echo "lockfile: OUT OF SYNC with package.json — CI's npm ci will fail. Run: npm install --package-lock-only --ignore-scripts"
+		echo "$lock" | grep -m3 "Invalid" | sed 's/^/  /'
+		fail=1
+	fi
+fi
 
 if [ "$parse_only" = 1 ]; then exit $fail; fi
 
