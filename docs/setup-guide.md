@@ -71,15 +71,20 @@ tunnel helper honours it.
 ## 2. Install Pi
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.1.0
-npm view @earendil-works/pi-coding-agent@1.1.0 dist.integrity
-# expect: sha512-SeEi/4hdcHNgA9UWlefZl7ZZpm3dzi2OoxNjDHsBJ9o298LNOtbL4DGKgitlEj6uCTccvtw6f2hlCkTPVJ2RXg==
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.2.0
+npm view @earendil-works/pi-coding-agent@1.2.0 dist.integrity
+# expect: sha512-h/4WaVWv1VlCaY8x8qEN5U+7jbF/e7+Ck6moPeEOFn5juMTWwNAXjwgYM7gRgbBYh8Zppwt6qWvJDzNTf4GNEQ==
 ```
 
-**Check:** `pi --version` prints `1.1.0`. The profile's package requires ≥ 1.1.0 (pi-subagents 0.20+ does) and was
-verified on 1.1.0 on 2026-10-12, after 0.86.1, 0.87.0 and 1.0.1; it leans on three Pi internals that a release could change, and
+**Check:** `pi --version` prints `1.2.0`. The profile's package requires ≥ 1.1.0 (pi-subagents 0.20+ does) and was
+verified on 1.2.0 on 2026-10-12, after 0.86.1, 0.87.0, 1.0.1 and 1.1.0; it leans on three Pi internals that a release could change, and
 `npm test` in the repository carries a canary for each — run it after any upgrade, and say which
 version you installed if it is not this one.
+
+Pi checks pi.dev for a newer release at startup and shows an "Update Available" box when there is
+one. For a demo, or anywhere a pinned version is the point, set `PI_SKIP_VERSION_CHECK=1` in the
+shell (the `pi()` function in step 6 is a good place); `PI_OFFLINE=1` goes further and stops all
+automatic network activity, including model catalogue refreshes.
 
 ## 3. Tunnel, endpoint check, and the model's real parameters
 

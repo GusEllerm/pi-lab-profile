@@ -5,7 +5,7 @@ endpoints: a right-hand status column instead of a crowded footer, an interactiv
 can **attach** to, and a `/round` command that puts a change through **dev → review → critique**
 with each role on a different model.
 
-Built against **Pi 0.86.1**; verified on **1.1.0** on macOS (12 Oct 2026), with pi-cc-extensions 1.0.2 and pi-subagents 0.21.0.
+Built against **Pi 0.86.1**; verified on **1.2.0** on macOS (12 Oct 2026), with pi-cc-extensions 1.0.2 and pi-subagents 0.21.0.
 
 ```bash
 pi install git:github.com/GusEllerm/pi-lab-profile
