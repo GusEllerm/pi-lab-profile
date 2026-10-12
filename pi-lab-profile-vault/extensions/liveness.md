@@ -1,6 +1,6 @@
 ---
 source: extensions/liveness.ts
-source-hash: 46a416e9e4d7479b21d581b38ed2148db4bee45d
+source-hash: 5528e7834b9a2408455607ece15fdb462df10f8c
 documented: 2026-10-04
 ---
 
@@ -33,6 +33,22 @@ hour-long tool) — with two lines from `thresholds(q, kind)`: `slow = max(2·p9
 15/30. `observe()` maps Pi's events onto the model, and the same function serves the primary
 (through `pi.on`) and subagents (through `session.subscribe` on pi-subagents' in-process session,
 found via `Symbol.for("pi-subagents:manager")`).
+
+**Lifecycle order (fixed 12 Oct 2026).** pi-subagents fires `subagents:started` *before*
+`subagents:created` for background spawns (fleet.ts has always handled this). The first version
+let `created` re-mark a started agent `queued` and drop its subscription, so a running subagent
+read "queued — waiting for a slot, not stuck" — exactly the false comfort liveness exists to
+prevent. Now whichever event comes first creates the entry, `created` never downgrades a started
+agent, and the ticker retries the subscription until the record's session exists. Verified live on
+Pi 1.1.0 + pi-subagents 0.21.0: `/stuck` read `ok · streaming` for a running Explore agent.
+
+**What counts as looping** (12 Oct 2026). The first rule — three identical calls — called
+legitimate polling a loop (`poll_task` while a task runs, `ensure_endpoint_up` while a block
+provisions, `get_subagent_result`) and stayed red while the model wrote its answer. Now a loop is
+the **same call getting the same result** three times running (a model retrying a failing edit);
+tools whose job is to poll (`POLLING_TOOLS`) are exempt; a reply with no tool call clears it; and
+the evidence is clipped to 120 characters, so the notice cannot carry a whole file's worth of
+arguments.
 
 ## Where the numbers come from, and how much to trust them
 

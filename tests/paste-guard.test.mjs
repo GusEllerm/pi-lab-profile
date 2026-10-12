@@ -18,6 +18,24 @@ test("three keys inside the window start a burst; the rest is held and comes bac
 	assert.equal(b.flush(), undefined);
 });
 
+test("key autorepeat and fast typing are never held: the window is 5 ms, autorepeat is 15 ms at its fastest", () => {
+	const b = new PasteBurst();
+	let t = 0;
+	for (let i = 0; i < 40; i++) { assert.equal(b.feed("a", t), false, `autorepeat key ${i}`); t += 15; }
+	for (const gap of [30, 12, 25, 9, 40]) { assert.equal(b.feed("x", t), false, "rollover-speed typing"); t += gap; }
+	assert.equal(b.holding, false);
+});
+
+test("control keys are never held and end a burst: a held-down backspace stays a backspace", () => {
+	const b = new PasteBurst();
+	for (let i = 0; i < 10; i++) assert.equal(b.feed("\x7f", 1000), false, "backspace, even in a same-millisecond burst");
+	feedAll(b, "abcd", 2000);
+	assert.equal(b.holding, true);
+	assert.equal(b.feed("\x03", 2000), false, "ctrl-c passes through");
+	assert.equal(b.flush(), "cd", "and what was held comes back once");
+	assert.equal(b.feed("\t", 3000), false, "a lone tab is not a burst");
+});
+
 test("typing at human speed is never held", () => {
 	const b = new PasteBurst(80);
 	let t = 0;

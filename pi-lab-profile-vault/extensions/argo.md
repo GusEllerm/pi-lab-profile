@@ -1,6 +1,6 @@
 ---
 source: extensions/argo.ts
-source-hash: 4fa0bf06129db0e75a3eb5dd15177cc8a51ec9cf
+source-hash: b38362b5ccb381e6d48d1820b336a0fe6adfa100
 documented: 2026-09-23
 ---
 
@@ -44,7 +44,18 @@ prompt relayed, de-duplicated real models, a privacy badge.
   line asking for a passcode/option/password) into `ctx.ui.input`. The answer goes to the child's
   pty. The relay returns when `argo-up` does, not when the pty closes — `ssh -f` leaves a master
   holding it open on purpose. **`/argo down`** runs `argo-down` and unregisters. **`/argo reload`**
-  re-reads the catalogue. Startup registers only if `/health` already answers.
+  re-reads the catalogue. Startup registers only if `/health` already answers — **within 800 ms,
+  and the catalogue within 3 s** (12 Oct 2026). Pi awaits each factory in turn on every start,
+  `/new`, `/resume`, `/fork` and `/reload`, and pi-subagents runs them again for every subagent, so
+  the old 3 s + 10 s waits stalled all of those on a half-open forward after sleep. Anything slower
+  now finishes in the background (runtime registration, as `/argo up` does). The price table loads
+  once per process (`Symbol.for("pi-lab-profile:argo-pricing")`).
+- **The `/argo up` continuation cannot crash Pi** (12 Oct 2026). It runs from a child-process
+  callback and awaits the network; a `/new` or `/reload` meanwhile made `pi.registerProvider` throw
+  "ctx is stale", and the rejection — uncaught, Pi has no handler — exited the process. `dead` is now
+  checked after every await (in `register()` too), every notice goes through a guarded `say()`, the
+  continuation and the Duo dialog's chain are caught, and the dialog is dismissed through its abort
+  `signal` when argo-up exits or is killed at the 3-minute limit.
 - **The relay's wrapper shell, and why it must outlive argo-up** (found 23 Sept 2026 when the
   user's first real `/argo up` ended in "tunnel up but the catalogue failed: fetch failed"). With
   `argo-up` as the pty's session leader its exit hung up the terminal, and the tunnel was dead

@@ -1,6 +1,6 @@
 ---
 source: extensions/fleet.ts
-source-hash: cd3e3bfdde6c3c2f4d96318d9a84522deaac1349
+source-hash: f40228dfb86408f640aa74dc3480f1566462b3c2
 documented: 2026-09-20
 ---
 
@@ -104,7 +104,18 @@ so a streaming agent rebuilds the rows only when they actually changed.
 While attached, the `pi.on("input")` hook intercepts interactive input and calls `session.steer(text)`
 instead of letting it reach the main session. It always returns `{ action: "handled" }` once
 `attachedId` is set — including for empty input and for an agent whose session has no `steer` — so
-nothing leaks through to the main conversation by accident.
+nothing leaks through to the main conversation by accident. **It steers only a `running` agent**
+(12 Oct 2026): pi-subagents keeps a finished agent's session for about ten minutes and its
+`steer()` still accepts text, which only queues it for a turn that never comes — "Sent to the
+agent." and then nothing. Now the text goes back into the editor with a notice, and the `s`
+shortcut checks the same thing.
+
+**List focus lets go** (12 Oct 2026). ↓ in an empty editor focuses the list; a printable key now
+clears that focus and goes to the editor. Before, the focus survived typing, so the *next*
+message's first letter could be taken as `s` and steer a subagent with the rest of it. When the
+selected agent drops out of the roster, focus clears rather than moving to an agent you never
+picked. The attached pane's memo key is `contentSize()` — block count and string lengths — not a
+`JSON.stringify` of the last message, which cost 3.5 ms and 4 MB per frame with a screenshot in it.
 
 Grep for: `attach`, `detach`, `attachedId`, `attachedRows`, `paneCache`, `MAX_PANE_MESSAGES`,
 `agentOf`.

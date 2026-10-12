@@ -32,6 +32,20 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 /** hpc-bridge's own guard, hooks/credential-guard.sh: a credential-looking key followed by = or :. */
 export const CREDENTIAL = /(password|api[_-]?key|secret|token)\s*[=:]/i;
 export const looksLikeCredential = (text: string): boolean => CREDENTIAL.test(text);
+
+/**
+ * For local `bash`, a stricter test: the key must be followed by a literal that looks like a
+ * secret -- eight or more characters with a digit in them, not a variable, a subshell or an
+ * environment lookup. hpc-bridge's own pattern (above) is right for its remote shells, where
+ * nothing else should be typed after `token=`, but on local bash it blocked everyday work:
+ * `grep -n "apiKey:" extensions/argo.ts`, `rg "secret:" config/`, a heredoc reading
+ * `token = os.environ[...]`, a `sed` rewriting `token: old`.
+ */
+const INLINE_SECRET = /(password|passwd|api[_-]?key|secret|token)\s*[=:]\s*["']?(?![$({[]|os\.environ|process\.env|getenv)([^\s"'`;|&)/]{8,})/gi;
+export const looksLikeInlineSecret = (text: string): boolean => {
+	for (const m of text.matchAll(INLINE_SECRET)) if (/\d/.test(m[2])) return true;
+	return false;
+};
 export const CREDENTIAL_REASON =
 	"Possible inline credential in the command. hpc-bridge holds secrets in its endpoint/broker; do not pass them on a command line.";
 
@@ -60,7 +74,14 @@ export type HpcState = {
  * of a warm block, for the row or for the gate.
  */
 export const IDLE_S = Number(process.env.PI_HPC_IDLE_S) || 600;
-export const isFresh = (s: HpcState, now = Date.now()): boolean => s.block === "warm" && s.at !== undefined && now - s.at < IDLE_S * 1000;
+/**
+ * Is the block known to be live right now? Warm, or still provisioning -- a block being allocated
+ * is one the server will not start a second time, and the driving-hpc skill tells the model to keep
+ * polling ensure_endpoint_up while it does (counting only `warm` made every such poll ask "Restart
+ * a billed compute block?"). Either way, only as fresh as the idle window.
+ */
+export const isFresh = (s: HpcState, now = Date.now()): boolean =>
+	(s.block === "warm" || s.block === "provisioning") && s.at !== undefined && now - s.at < IDLE_S * 1000;
 
 /** The first JSON object in a tool's text output; hpc-bridge returns pydantic models as JSON. */
 export function parseResult(text: string): Record<string, unknown> | undefined {
@@ -201,31 +222,67 @@ export function skillText(body: string, name = "driving-hpc"): string {
 /** uv's cache (UV_CACHE_DIR, else ~/.cache/uv), where uvx unpacks every version it has installed. */
 export const uvCacheDir = (): string => process.env.UV_CACHE_DIR || join(homedir(), ".cache", "uv");
 
+/**
+ * Where uvx unpacks a wheel: `archive-v0/<hash>/hpc_bridge/...` for a plain unpack, or
+ * `archive-v0/<hash>/lib/python3.x/site-packages/hpc_bridge/...` for a built environment. Only
+ * those two places are looked at. Walking the cache instead took 16-19 s on a 37 GB cache of
+ * 3,431 archives (measured 12 Oct 2026), synchronously, on every start and /reload; this takes
+ * ~0.3 s for the same answer.
+ */
+const candidates = (archive: string, lib: string[] | undefined): string[] => [
+	join(archive, "hpc_bridge", "_guidance", "SKILL.md"),
+	...(lib ?? []).filter((d) => d.startsWith("python")).map((py) => join(archive, "lib", py, "site-packages", "hpc_bridge", "_guidance", "SKILL.md")),
+];
+
 /** The newest hpc_bridge/_guidance/SKILL.md under uv's cache, or undefined before the server has ever run. */
 export function findPluginSkill(cacheDir = uvCacheDir()): string | undefined {
+	const root = join(cacheDir, "archive-v0");
 	let best: { file: string; mtime: number } | undefined;
-	const walk = (dir: string, depth: number) => {
-		if (depth > 7) return;
-		let entries: import("node:fs").Dirent[];
+	let archives: string[];
+	try {
+		archives = readdirSync(root);
+	} catch {
+		return undefined;
+	}
+	for (const a of archives) {
+		const archive = join(root, a);
+		let lib: string[] | undefined;
 		try {
-			entries = readdirSync(dir, { withFileTypes: true });
+			lib = existsSync(join(archive, "lib")) ? readdirSync(join(archive, "lib")) : undefined;
 		} catch {
-			return;
+			lib = undefined;
 		}
-		for (const e of entries) {
-			const path = join(dir, e.name);
-			if (e.isDirectory()) {
-				if (e.name === "hpc_bridge") {
-					const file = join(path, "_guidance", "SKILL.md");
-					if (existsSync(file)) {
-						const mtime = statSync(file).mtimeMs;
-						if (!best || mtime > best.mtime) best = { file, mtime };
-					}
-				} else if (!e.name.startsWith(".") && e.name !== "node_modules") walk(path, depth + 1);
+		for (const file of candidates(archive, lib)) {
+			try {
+				const mtime = statSync(file).mtimeMs;
+				if (!best || mtime > best.mtime) best = { file, mtime };
+			} catch {
+				// not here
 			}
 		}
-	};
-	walk(cacheDir, 0);
+	}
+	return best?.file;
+}
+
+/** The same lookup without blocking the event loop, for the refresh after startup. */
+export async function findPluginSkillAsync(cacheDir = uvCacheDir()): Promise<string | undefined> {
+	const { readdir, stat } = await import("node:fs/promises");
+	const root = join(cacheDir, "archive-v0");
+	let archives: string[];
+	try {
+		archives = await readdir(root);
+	} catch {
+		return undefined;
+	}
+	let best: { file: string; mtime: number } | undefined;
+	for (const a of archives) {
+		const archive = join(root, a);
+		const lib = await readdir(join(archive, "lib")).catch(() => undefined);
+		for (const file of candidates(archive, lib)) {
+			const st = await stat(file).catch(() => undefined);
+			if (st && (!best || st.mtimeMs > best.mtime)) best = { file, mtime: st.mtimeMs };
+		}
+	}
 	return best?.file;
 }
 
@@ -290,8 +347,30 @@ export default function (pi: ExtensionAPI): void {
 	const server = hpcServer(process.cwd());
 	const prefix = server?.prefix ?? "mcp__hpc__";
 	// the skill lives in uv's cache only once the server has been installed; until then there is nothing to advertise
-	const skillDir = server ? installSkill(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), findPluginSkill()) : undefined;
+	// The skill as last installed is advertised at once; only a first-ever run looks it up before
+	// loading finishes. A refresh from uv's cache then runs in the background, so a newer
+	// hpc-bridge release reaches the skill on the next start or /reload without delaying this one.
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	const installed = join(agentDir, "cache", "hpc-bridge", "driving-hpc");
+	const skillDir = !server ? undefined : existsSync(join(installed, "SKILL.md")) ? installed : installSkill(agentDir, findPluginSkill());
 	pi.on("resources_discover", () => (skillDir ? { skillPaths: [dirname(skillDir)] } : undefined));
+	// once per process: pi-subagents re-runs this factory for every subagent, in this process
+	const g = globalThis as Record<symbol, boolean | undefined>;
+	const REFRESHED = Symbol.for("pi-lab-profile:hpc-skill-refreshed");
+	if (server && !g[REFRESHED]) {
+		g[REFRESHED] = true;
+		const refresh = setTimeout(() => {
+			findPluginSkillAsync()
+				.then((source) => {
+					if (!dead) installSkill(agentDir, source);
+				})
+				.catch(() => {
+					// a refresh that fails leaves the last installed copy, which is still the plugin's
+				});
+		}, 3000);
+		refresh.unref?.();
+		pi.on("session_shutdown", () => clearTimeout(refresh));
+	}
 	/** The hpc-bridge tool behind a Pi tool name: the configured server's, or, with no config, any server serving hpc-bridge's tool set. */
 	const baseOf = (toolName: string): string | undefined => {
 		if (toolName.startsWith(prefix)) return toolName.slice(prefix.length);
@@ -317,10 +396,10 @@ export default function (pi: ExtensionAPI): void {
 		const { toolName, input } = event as unknown as { toolName: string; input: Record<string, unknown> };
 		const base = baseOf(toolName);
 
-		// The credential guard, on exactly what hpc-bridge's own hook covers.
+		// The credential guard: hpc-bridge's own pattern on its remote shells, a literal-value test on local bash.
 		if (toolName === "bash" || base === "run_shell" || base === "login_shell") {
 			const command = typeof input?.command === "string" ? input.command : "";
-			if (looksLikeCredential(command)) return { block: true, reason: CREDENTIAL_REASON };
+			if (toolName === "bash" ? looksLikeInlineSecret(command) : looksLikeCredential(command)) return { block: true, reason: CREDENTIAL_REASON };
 		}
 
 		// The spend gate. hpc-bridge trusts the model to have asked; this does not. And it is not the

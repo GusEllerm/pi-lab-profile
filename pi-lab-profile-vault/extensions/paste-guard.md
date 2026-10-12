@@ -1,6 +1,6 @@
 ---
 source: extensions/paste-guard.ts
-source-hash: f7c9ee13a8a9acfee25757a6a63c2e6362262ab2
+source-hash: 8c448fae69da1c71774c233a6f0c3c29aba88032
 documented: 2026-09-23
 ---
 
@@ -32,10 +32,19 @@ Three measurements decided the design:
 
 ## How it works
 
-`PasteBurst.feed(key, now)`: three keys inside `BURST_MS` (80) start a burst; from then on every
+`PasteBurst.feed(key, now)`: three keys inside `BURST_MS` (5 ms) start a burst; from then on every
 key is held (carriage returns become newlines) and the handler returns `{ consume: true }`. The
 first two keys were typed into the editor before the burst was known and stay there. `QUIET_MS`
-(60) after the last key, `flush()` appends the held text to the editor with `setEditorText`.
+(40 ms) after the last key, `flush()` appends the held text to the editor with `setEditorText`.
+
+**The window is measured (12 Oct 2026).** The first version used 80 ms, which caught fast typing
+and held key autorepeat — a held-down backspace was swallowed and re-inserted as text. pi-tui
+emits every key of one stdin chunk in a single synchronous loop (`stdin-buffer.js`), so a pasted
+chunk arrives within the same millisecond; macOS autorepeat is never faster than 15 ms, and typing
+is slower. 5 ms separates them with room to spare. Only text is held: any escape sequence or
+control key other than CR, LF and tab passes through and ends a burst. Verified live on Pi 1.1.0:
+an unbracketed three-line paste lands whole, typing at 20 ms/key and ten 15 ms backspaces behave
+exactly as without the guard.
 
 **Pi does not render after a timer.** `setEditorText` from the flush changed the editor's text and
 drew nothing until the next key — measured: the editor read the whole paste, the screen showed

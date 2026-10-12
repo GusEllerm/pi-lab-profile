@@ -93,19 +93,39 @@ test("waiting on a human or on a subagent is never stuck, and a dialog overrides
 	assert.equal(m.verdict(700 * S).level, "stalled");
 });
 
-test("three identical tool calls in a row is a loop; a different call ends it", () => {
+test("a loop is the same call getting the same result three times; a different call or result ends it", () => {
 	const m = new LivenessModel(new Timings());
-	for (let i = 0; i < 2; i++) { m.toolStart(`${i}`, "bash", { command: "npm test" }, i * S); m.toolEnd(`${i}`, i * S + 500); }
-	assert.equal(m.verdict(3 * S).level, "ok");
-	m.toolStart("2", "bash", { command: "npm test" }, 3 * S);
+	const run = (id, args, result, at) => { m.toolStart(id, "edit", args, at); m.toolEnd(id, at + 100, result); };
+	const fail = { isError: true, content: [{ type: "text", text: "oldText not found" }] };
+	run("0", { path: "a" }, fail, 0);
+	run("1", { path: "a" }, fail, 1 * S);
+	assert.equal(m.verdict(2 * S).level, "ok");
+	run("2", { path: "a" }, fail, 2 * S);
 	assert.equal(m.verdict(3 * S).level, "looping");
-	assert.match(m.verdict(3 * S).summary, /same call 3× running/);
-	m.toolEnd("2", 4 * S);
-	m.toolStart("3", "bash", { command: "npm test" }, 5 * S);
-	assert.match(m.verdict(5 * S).summary, /4×/);
-	m.toolEnd("3", 6 * S);
-	m.toolStart("4", "edit", { path: "a" }, 7 * S);
-	assert.equal(m.verdict(7 * S).level, "ok", "a different call breaks the run");
+	assert.match(m.verdict(3 * S).summary, /same call, same result 3× running/);
+	run("3", { path: "a" }, fail, 3 * S);
+	assert.match(m.verdict(4 * S).summary, /4×/);
+	m.toolStart("4", "read", { path: "a" }, 5 * S);
+	assert.notEqual(m.verdict(5 * S).level, "looping", "a different call breaks the run at once");
+	m.toolEnd("4", 6 * S, {});
+	run("5", { path: "a" }, fail, 7 * S);
+	run("6", { path: "a" }, { content: [{ type: "text", text: "ok" }] }, 8 * S);
+	run("7", { path: "a" }, fail, 9 * S);
+	assert.equal(m.verdict(10 * S).level, "ok", "the same call with different results is progress");
+});
+
+test("polling is not looping, and a reply without tool calls clears a loop", () => {
+	const m = new LivenessModel(new Timings());
+	for (let i = 0; i < 5; i++) {
+		m.toolStart(`p${i}`, "mcp__hpc__poll_task", { task_id: "t1" }, i * S);
+		m.toolEnd(`p${i}`, i * S + 100, { content: [{ type: "text", text: '{"status":"running"}' }] });
+	}
+	assert.equal(m.verdict(6 * S).level, "ok", "poll_task five times with the same answer is the plan");
+	for (let i = 0; i < 3; i++) { m.toolStart(`e${i}`, "bash", { command: "make" }, 10 * S + i); m.toolEnd(`e${i}`, 10 * S + i + 1, "same"); }
+	assert.equal(m.verdict(11 * S).level, "looping");
+	assert.ok(m.verdict(11 * S).evidence[0].length <= 120, "the evidence is clipped for the notice");
+	m.messageEnd(12 * S, false);
+	assert.equal(m.verdict(13 * S).level, "ok", "the model replied without calling a tool: not looping any more");
 });
 
 test("queued subagents wait for a slot; finished ones are done", () => {
@@ -127,7 +147,7 @@ test("observe() maps Pi's events onto the model, for the primary and for a subsc
 	assert.equal(m.phase, "thinking");
 	observe(m, { type: "message_update", assistantMessageEvent: { type: "text_delta" } }, 2 * S);
 	assert.equal(m.phase, "streaming");
-	observe(m, { type: "message_end", message: {} }, 3 * S);
+	observe(m, { type: "message_end", message: { role: "assistant", content: [{ type: "toolCall" }] } }, 3 * S);
 	observe(m, { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "x" } }, 3 * S);
 	assert.equal(m.phase, "tool");
 	observe(m, { type: "tool_execution_update", toolCallId: "t1", toolName: "bash", args: {}, partialResult: {} }, 4 * S);
@@ -166,4 +186,46 @@ test("the extension: a stalled primary is told once per episode, the row stays q
 	}
 	assert.equal(notes.length, 0, "nothing said while the wait is within normal");
 	assert.ok(FLOORS.ttft.stalled >= 60, "the first-token floor is a minute, so a shared GPU's queue is not an alarm");
+});
+
+test("subagents: started may precede created, the session may appear late, and either way the agent is tracked", async () => {
+	const handlers = new Map();
+	const bus = new Map();
+	const emitted = [];
+	const pi = {
+		on: (e, h) => { handlers.set(e, h); return () => {}; },
+		events: { on: (e, h) => { bus.set(e, h); return () => {}; }, emit: (e, p) => emitted.push([e, p]) },
+		registerCommand: () => {},
+	};
+	const KEY = Symbol.for("pi-subagents:manager");
+	const savedRegistry = globalThis[KEY];
+	const savedDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = "/nonexistent/for-this-test";
+	let listener;
+	const sessions = new Map();
+	globalThis[KEY] = { getRecord: (id) => ({ session: sessions.get(id) }) };
+	try {
+		const { default: liveness } = await import("../extensions/liveness.ts");
+		liveness(pi);
+		handlers.get("session_start")({}, { hasUI: false, ui: {} });
+		// pi-subagents' real order for a background spawn: started, then created; no session yet
+		bus.get("subagents:started")({ id: "a1", type: "Explore", description: "count files" });
+		bus.get("subagents:created")({ id: "a1", type: "Explore", description: "count files" });
+		const marks = () => emitted.filter(([e]) => e === "liveness:agents").at(-1)?.[1] ?? {};
+		// the session appears; the ticker's retry subscribes
+		sessions.set("a1", { subscribe: (fn) => { listener = fn; return () => { listener = undefined; }; } });
+		await new Promise((r) => setTimeout(r, 2300));
+		assert.ok(listener, "the ticker subscribed once the session existed");
+		assert.notEqual(marks().a1?.level, undefined);
+		assert.doesNotMatch(marks().a1.summary, /queued/, "created after started never downgrades to queued");
+		listener({ type: "tool_execution_start", toolCallId: "t", toolName: "bash", args: { command: "ls" } });
+		await new Promise((r) => setTimeout(r, 2100));
+		assert.match(marks().a1.summary, /bash running/, "the subagent's own events drive its verdict");
+		bus.get("subagents:completed")({ id: "a1" });
+		assert.equal(listener, undefined, "unsubscribed when it finishes");
+		handlers.get("session_shutdown")();
+	} finally {
+		globalThis[KEY] = savedRegistry;
+		if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = savedDir;
+	}
 });

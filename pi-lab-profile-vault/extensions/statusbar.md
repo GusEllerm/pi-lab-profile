@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 68767451914fb29d24f152a4f70d24aba7536732
+source-hash: 23411bf47249cd56f454bd984969def6cea4a5f2
 documented: 2026-09-20
 ---
 
@@ -187,6 +187,12 @@ Two hard-won rules are encoded here, both in [[../investigations/scroll-lag-2026
 - These wrappers live on objects that **outlive the activation** (the TUI, the document,
   `Text.prototype`), so they are installed **once, ever**, and read their counters through a shared
   sink (`Symbol.for("pi-statusbar:prof-sink")`) that each activation repoints at its own `prof`.
+  **Only an activation with a TUI repoints it** (12 Oct 2026): `sink.prof` and
+  `sink.suppressHover` are claimed in `mountSidebar`, not at factory time, because pi-subagents
+  runs every extension factory again, in this process, for each subagent. A child with no UI that
+  took the sink at load switched the hover guard off for the real session (its predicate tested
+  its own, never-mounted TUI) and rerouted `/prof`. Verified live: after a subagent spawn, 200 of
+  200 motion events were still kept from pi-cc.
   Versioning them instead caused a new wrapper to stack on each reload until every component
   rendered through four nested timers — `/prof` reported 61.6ms document renders against 2.1ms and
   `22787ms` of child time inside a 121ms render. The instrument became the effect being measured.

@@ -140,13 +140,26 @@ function readSession(id: string, session: any): { turns: number; activity?: stri
  * renders on every frame while an agent streams.
  */
 let paneCache: { key: string; rows: string[] } | undefined;
+/** How much a message's content holds, without serialising it: string lengths and block count. */
+export function contentSize(content: unknown): string {
+	if (typeof content === "string") return `s${content.length}`;
+	if (!Array.isArray(content)) return "0";
+	let n = 0;
+	for (const b of content as Array<Record<string, unknown>>) {
+		for (const k of ["text", "thinking", "data", "result"] as const) if (typeof b?.[k] === "string") n += (b[k] as string).length;
+		if (b?.arguments && typeof b.arguments === "object") n += Object.keys(b.arguments as object).length;
+	}
+	return `${content.length}:${n}`;
+}
 function attachedRows(session: any, width: number, theme: Theme): string[] {
 	// Only the tail: a long-running agent's branch can hold thousands of messages, and this rebuilds
 	// whenever it streams. MAX_PANE_MESSAGES keeps that bounded.
 	const all = session?.sessionManager?.getBranch?.() ?? [];
 	const entries = all.slice(-MAX_PANE_MESSAGES);
 	const lastMessage = entries[entries.length - 1] as { message?: any } | undefined;
-	const key = `${entries.length}:${width}:${JSON.stringify(lastMessage?.message?.content ?? "").length}`;
+	// The key must be cheaper than what it caches (vault invariant): stringifying the last message
+	// cost 3.5 ms and a 4 MB allocation per frame when it held a screenshot. Block lengths are O(1).
+	const key = `${entries.length}:${width}:${contentSize(lastMessage?.message?.content)}`;
 	if (paneCache?.key === key) return paneCache.rows;
 	const rows: string[] = [];
 	const mdTheme = getMarkdownTheme();
@@ -600,9 +613,13 @@ export default function (pi: ExtensionAPI): void {
 		const agent = agentOf(attachedId);
 		const text = event.text.trim();
 		if (!agent || !text) return { action: "handled" as const };
-		const session = live(agent.id)?.session;
-		if (typeof session?.steer !== "function") {
-			ctx.ui.notify("That agent has finished — esc to detach.", "warning");
+		const info = live(agent.id);
+		const session = info?.session;
+		// A finished agent's session lingers for minutes and still accepts steer(), which only queues
+		// the text for a turn that never comes -- so check that it is running, and give the text back.
+		if (typeof session?.steer !== "function" || (info?.status ?? agent.status) !== "running") {
+			ctx.ui.setEditorText(event.text);
+			ctx.ui.notify("That agent has finished, so nothing would read this — your text is back in the editor. Esc detaches.", "warning");
 			return { action: "handled" as const };
 		}
 		try {
@@ -686,7 +703,8 @@ export default function (pi: ExtensionAPI): void {
 					render(width: number): string[] {
 						ensureTicker();
 						const list = roster();
-						if (selectedId && !list.some((a) => a.id === selectedId)) selectedId = list[list.length - 1]?.id; // its agent dropped out
+						// its agent dropped out: let go of the list rather than move focus to an agent you never picked
+						if (selectedId && !list.some((a) => a.id === selectedId)) selectedId = undefined;
 						return rows(theme, width);
 					},
 				} as Component;
@@ -731,9 +749,10 @@ export default function (pi: ExtensionAPI): void {
 				void ctx.ui
 					.input(`Steer "${oneLine(agent.description || agent.type, 40)}"`, "message for the agent")
 					.then(async (text) => {
-						const session = live(agent.id)?.session;
+						const info = live(agent.id);
+						const session = info?.session;
 						if (!text) return;
-						if (typeof session?.steer !== "function") return ctx.ui.notify("That agent is no longer running.", "warning");
+						if (typeof session?.steer !== "function" || (info?.status ?? agent.status) !== "running") return ctx.ui.notify("That agent is no longer running.", "warning");
 						await session.steer(text);
 						if (dead) return; // the activation can go while steer() is in flight
 						ctx.ui.notify("Steering message delivered.", "info");
@@ -747,7 +766,13 @@ export default function (pi: ExtensionAPI): void {
 						}
 					});
 			} else if (data === "m") pi.sendUserMessage(`/agent-model ${list[index].id}`, { expandPromptTemplates: true });
-			else return undefined;
+			else {
+				// Any other key means you are typing: the list lets go, and the key goes to the editor.
+				// Left focused, the next message's first letter could be taken as `s` (steer this agent).
+				selectedId = undefined;
+				rerender();
+				return undefined;
+			}
 			rerender();
 			return { consume: true };
 		});

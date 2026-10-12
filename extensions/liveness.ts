@@ -110,8 +110,14 @@ export const HUMAN_TOOLS = /ask_user|question|confirm/i;
 /** Tools that wait on another agent: judged by that agent's own liveness. */
 export const AGENT_TOOLS = new Set(["Agent", "get_subagent_result", "steer_subagent", "SubagentWorkflow", "wait_for_subagent"]);
 export const LOOP_RUN = 3;
+/**
+ * Tools whose job is to be called again until something changes: hpc-bridge's poll_task and
+ * ensure_endpoint_up (its skill says to keep polling while a block provisions), subagent result
+ * waits, anything named for polling or status. Calling them repeatedly is the plan, not a loop.
+ */
+export const POLLING_TOOLS = /poll|status|wait|get_subagent_result|ensure_endpoint_up|connect_facility|complete_login/i;
 
-type Running = { name: string; startedAt: number; lastUpdate: number };
+type Running = { name: string; startedAt: number; lastUpdate: number; sig: string };
 
 export class LivenessModel {
 	phase: Phase = "idle";
@@ -151,17 +157,19 @@ export class LivenessModel {
 		this.enter("streaming", now);
 	}
 	/** The reply is complete; tools, if any, follow. */
-	messageEnd(now: number): void {
+	/** A reply ended; one with no tool call means the model has stopped repeating itself. */
+	messageEnd(now: number, calledTools = true): void {
+		if (!calledTools) {
+			this.loop = 0;
+			this.calls = [];
+		}
 		if (this.phase === "thinking" || this.phase === "streaming") this.enter("idle", now);
 	}
 	toolStart(id: string, name: string, args: unknown, now: number): void {
-		this.tools.set(id, { name, startedAt: now, lastUpdate: now });
-		// three identical calls in a row is a loop; a different call ends it
 		const sig = `${name} ${safe(args)}`;
-		this.calls.push(sig);
-		if (this.calls.length > 8) this.calls.shift();
-		const tail = this.calls.slice(-LOOP_RUN);
-		this.loop = tail.length === LOOP_RUN && tail.every((s) => s === sig) ? this.loop + 1 : 0;
+		this.tools.set(id, { name, startedAt: now, lastUpdate: now, sig });
+		// a different call ends a loop at once; the same call is judged when its result is in
+		if (this.calls.length && !this.calls.at(-1)!.startsWith(`${sig} => `)) this.loop = 0;
 		this.enter(HUMAN_TOOLS.test(name) ? "waiting-human" : AGENT_TOOLS.has(name) ? "waiting-agent" : "tool", now);
 	}
 	toolUpdate(id: string, now: number): void {
@@ -169,11 +177,20 @@ export class LivenessModel {
 		if (t) t.lastUpdate = now;
 		this.lastProgress = now;
 	}
-	toolEnd(id: string, now: number): void {
+	toolEnd(id: string, now: number, result?: unknown): void {
 		const t = this.tools.get(id);
 		if (t) {
 			this.tools.delete(id);
 			if (!HUMAN_TOOLS.test(t.name) && !AGENT_TOOLS.has(t.name)) this.timings.record(t.name, (now - t.startedAt) / 1000);
+			// A loop is the same call getting the same answer, three times running -- a model retrying
+			// a failing edit. A poller is exempt: asking again until the answer changes is its job.
+			if (!POLLING_TOOLS.test(t.name) && !HUMAN_TOOLS.test(t.name) && !AGENT_TOOLS.has(t.name)) {
+				const entry = `${t.sig} => ${safe(result).slice(0, 2000)}`;
+				this.calls.push(entry);
+				if (this.calls.length > 8) this.calls.shift();
+				const tail = this.calls.slice(-LOOP_RUN);
+				this.loop = tail.length === LOOP_RUN && tail.every((c) => c === entry) ? this.loop + 1 : 0;
+			}
 		}
 		this.lastProgress = now;
 		if (this.tools.size === 0) this.enter("idle", now);
@@ -209,7 +226,7 @@ export class LivenessModel {
 		const base = (level: Level, summary: string, evidence: string[] = [], brief: string[] = []): Verdict => ({ level, phase: this.phase, since: this.since, waitMs: wait, summary, evidence, brief });
 		const briefOf = (q: Quantiles, t: { slow: number; stalled: number }) => [`usual ${fmtS(q.p95 * 1000)} · p99 ${fmtS(q.p99 * 1000)}`, `slow >${fmtS(t.slow * 1000)} · stuck >${fmtS(t.stalled * 1000)}`];
 		if (this.promptDepth > 0) return base("waiting", "waiting for you (a dialog is open)");
-		if (this.loop >= 1) return base("looping", `same call ${LOOP_RUN + this.loop - 1}× running`, [this.calls.at(-1) ?? ""]);
+		if (this.loop >= 1) return base("looping", `same call, same result ${LOOP_RUN + this.loop - 1}× running`, [clip(this.calls.at(-1)?.split(" => ")[0] ?? "", 120)], ["same call, same", `result ${LOOP_RUN + this.loop - 1}×`]);
 		switch (this.phase) {
 			case "idle":
 			case "done":
@@ -252,6 +269,7 @@ const safe = (v: unknown): string => {
 		return String(v);
 	}
 };
+const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 export const fmtS = (ms: number): string => {
 	const s = Math.max(0, Math.round(ms / 1000));
 	return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s` : `${(s / 3600).toFixed(1)}h`;
@@ -270,9 +288,13 @@ export function observe(model: LivenessModel, event: { type?: string; [k: string
 			if (/delta|start/.test(kind)) model.token(now);
 			return true;
 		}
-		case "message_end":
-			model.messageEnd(now);
+		case "message_end": {
+			const m = event.message as { role?: string; content?: unknown } | undefined;
+			if (m?.role !== "assistant") return true;
+			const calledTools = Array.isArray(m.content) && m.content.some((b) => (b as { type?: string })?.type === "toolCall");
+			model.messageEnd(now, calledTools);
 			return true;
+		}
 		case "tool_execution_start":
 			model.toolStart(String(event.toolCallId), String(event.toolName), event.args, now);
 			return true;
@@ -280,7 +302,7 @@ export function observe(model: LivenessModel, event: { type?: string; [k: string
 			model.toolUpdate(String(event.toolCallId), now);
 			return true;
 		case "tool_execution_end":
-			model.toolEnd(String(event.toolCallId), now);
+			model.toolEnd(String(event.toolCallId), now, event.result);
 			return true;
 		case "ui_prompt_start":
 			model.promptStart(now);
@@ -327,7 +349,7 @@ export default function (pi: ExtensionAPI): void {
 
 	const primary = new LivenessModel(timings);
 	/** subagents by id: their model, name, and how to stop listening */
-	const agents = new Map<string, { model: LivenessModel; name: string; off?: () => void }>();
+	const agents = new Map<string, { model: LivenessModel; name: string; off?: () => void; started?: boolean }>();
 	const episodes = new Map<string, Level>(); // last level told per agent, so each episode is said once
 	let ctxRef: ExtensionContext | undefined;
 	let ticker: ReturnType<typeof setInterval> | undefined;
@@ -380,6 +402,7 @@ export default function (pi: ExtensionAPI): void {
 		ticker = setInterval(() => {
 			if (dead) return;
 			const active = primary.phase !== "idle" || agents.size > 0;
+			for (const id of agents.keys()) subscribe(id);
 			if (!active) {
 				clearInterval(ticker!);
 				ticker = undefined;
@@ -402,32 +425,50 @@ export default function (pi: ExtensionAPI): void {
 
 	// subagents: pi-subagents runs them in-process; their sessions stream the same events
 	const registry = () => (globalThis as Record<symbol, { getRecord?: (id: string) => { session?: { subscribe?: (fn: (e: unknown) => void) => () => void } } } | undefined>)[Symbol.for("pi-subagents:manager")];
-	const watch = (id: string, name: string) => {
-		const have = agents.get(id);
-		if (have?.off) return;
-		const model = have?.model ?? new LivenessModel(timings);
-		const entry = { model, name, off: undefined as (() => void) | undefined };
-		agents.set(id, entry);
+	/**
+	 * Listen to a running subagent's own session. pi-subagents fires `subagents:started` *before*
+	 * `subagents:created` for background spawns (fleet.ts relies on the same ordering), and the
+	 * record's session may not exist yet when either arrives -- so the entry is created by whichever
+	 * event comes first, `created` never downgrades a started agent to queued, and the ticker keeps
+	 * retrying the subscription until it holds.
+	 */
+	const entryFor = (id: string, name: string) => {
+		let entry = agents.get(id);
+		if (!entry) {
+			entry = { model: new LivenessModel(timings), name };
+			agents.set(id, entry);
+		} else if (name) entry.name = name;
+		return entry;
+	};
+	const subscribe = (id: string) => {
+		const entry = agents.get(id);
+		if (!entry || entry.off || !entry.started) return;
 		try {
 			const session = registry()?.getRecord?.(id)?.session;
+			const model = entry.model;
 			const off = session?.subscribe?.((e) => {
 				if (!dead && e && typeof e === "object") observe(model, e as { type?: string }, Date.now());
 			});
-			if (off) {
-				entry.off = off;
-				model.start("subagent", Date.now());
-			}
+			if (off) entry.off = off;
 		} catch {
-			// no session to listen to: the agent shows as running with no verdict beyond "no news"
+			// no session yet: the ticker tries again
 		}
+	};
+	const watch = (id: string, name: string) => {
+		const entry = entryFor(id, name);
+		if (!entry.started) {
+			entry.started = true;
+			// running, not yet heard from: judged as waiting for its first token
+			entry.model.start("subagent", Date.now());
+		}
+		subscribe(id);
 		ensureTicker();
 	};
 	pi.events.on("subagents:created", (data) => {
 		const d = data as { id?: string; type?: string; description?: string } | undefined;
 		if (!d?.id || dead) return;
-		const model = agents.get(d.id)?.model ?? new LivenessModel(timings);
-		model.queued(Date.now());
-		agents.set(d.id, { model, name: d.description || d.type || d.id });
+		const entry = entryFor(d.id, d.description || d.type || d.id);
+		if (!entry.started) entry.model.queued(Date.now());
 		ensureTicker();
 	});
 	pi.events.on("subagents:started", (data) => {

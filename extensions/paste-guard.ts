@@ -9,18 +9,24 @@
  * day: with the markers the whole stack (pi-cc's editor, this profile) keeps a paste in the
  * editor, so the markers had not arrived; and Pi hands extensions the input one key at a time,
  * so a chunk can never be recognised as a paste by its shape. What is left is timing, the
- * heuristic proposed in #7321: three keys inside BURST_MS is a paste. From then on keys are
- * held back (carriage returns become newlines) until QUIET_MS pass without one, and the whole
- * burst is appended to the editor. The first two keys were typed before the burst was known;
- * they are already in the editor, so only what follows is held. A paste whose first line is two
- * characters long can still submit early -- the price of having no marker.
+ * heuristic proposed in #7321, with the window measured rather than guessed: pi-tui emits every
+ * key of one stdin chunk in a single synchronous loop (stdin-buffer.js), so a pasted chunk lands
+ * within the same millisecond, while macOS key repeat is never faster than 15 ms and typing,
+ * rollover included, is slower still. So three keys inside BURST_MS (5 ms) is a paste; the first
+ * version's 80 ms caught fast typing and held autorepeat. From then on keys are held back
+ * (carriage returns become newlines) until QUIET_MS pass without one, and the burst is appended
+ * to the editor. The first two keys were already delivered before the burst was known. A paste
+ * whose first line is two characters long can still submit early -- the price of no marker -- and
+ * the text lands at the end of the editor, not at the cursor (the only write Pi offers is
+ * setEditorText).
  *
- * Escape sequences (arrows, mouse reports, real bracketed pastes) are never held; they end a burst.
+ * Only text is held: escape sequences (arrows, mouse reports, real bracketed pastes) and control
+ * keys (backspace, ctrl-c, ...) are never held, and end a burst.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-export const BURST_MS = 80;
-export const QUIET_MS = 60;
+export const BURST_MS = 5;
+export const QUIET_MS = 40;
 
 /** The burst detector, clock supplied, so the timing can be tested without waiting. */
 export class PasteBurst {
@@ -39,7 +45,8 @@ export class PasteBurst {
 
 	/** Feed one input event; returns true when it was held (and must be consumed). */
 	feed(data: string, now: number): boolean {
-		if (!data || data.includes("\x1b")) {
+		// text only: an escape sequence or a control key (other than CR, LF, tab) is a key, not a paste
+		if (!data || data.includes("\x1b") || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(data)) {
 			this.recent = [];
 			return false;
 		}

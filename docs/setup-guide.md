@@ -71,13 +71,13 @@ tunnel helper honours it.
 ## 2. Install Pi
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.0
-npm view @earendil-works/pi-coding-agent@0.87.0 dist.integrity
-# expect: sha512-S9JJVGHya/h0e0M+zwPTB6RkPe7PmLLqfBUTssFYW5mxAti6oZEILn4jvaUImENRC3U9RwXAB6H4gw8xj2J0GQ==
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.1.0
+npm view @earendil-works/pi-coding-agent@1.1.0 dist.integrity
+# expect: sha512-SeEi/4hdcHNgA9UWlefZl7ZZpm3dzi2OoxNjDHsBJ9o298LNOtbL4DGKgitlEj6uCTccvtw6f2hlCkTPVJ2RXg==
 ```
 
-**Check:** `pi --version` prints `0.87.0`. The profile's package requires ≥ 0.86.0 and was
-verified on 0.86.1 and 0.87.0; it leans on three Pi internals that a release could change, and
+**Check:** `pi --version` prints `1.1.0`. The profile's package requires ≥ 1.1.0 (pi-subagents 0.20+ does) and was
+verified on 1.1.0 on 2026-10-12, after 0.86.1, 0.87.0 and 1.0.1; it leans on three Pi internals that a release could change, and
 `npm test` in the repository carries a canary for each — run it after any upgrade, and say which
 version you installed if it is not this one.
 
@@ -368,19 +368,27 @@ It adds compact tool rows, click-to-expand, split diffs, collapsed thinking, `/c
 `/ccstyle` and the `cc-light`/`cc-dark` themes.
 
 ```bash
-npm view pi-cc-extensions@0.8.71 dist.integrity
-# expect: sha512-AdXHT4vH/9NCf6W3Kpj0z3ixOVmqsrp3NXRaTpmnom0pWUKAqqcdl0UYSoRcx62rigNCRpwOIZwB93BiEkU/Pg==
-pi install npm:pi-cc-extensions@0.8.71
+npm view pi-cc-extensions@1.0.2 dist.integrity
+# expect: sha512-Qwz+B+2Lng0qLgzin8dcdfhk7Ghx+xpm7hN2UW4WXMkvX1A2eqaBita2TQ0OlA5qSFWVkRgljbBs70xnXV9jRQ==
+pi install npm:pi-cc-extensions@1.0.2
 ```
 
-Create `~/.pi/agent/claude-code-style.json` so thinking collapses to a single line with no
-preview. The package's default is a rolling 3-line preview:
+Create `~/.pi/agent/pi-cc-extensions.json` (pi-cc ≥ 0.9 reads this name; it migrates an older
+`claude-code-style.json` and deletes it). `previewLines: 0` collapses thinking to a single line —
+the default is a rolling 3-line preview. The other two keys turn off pi-cc's own footer and sticky
+prompt row, which Part 2's status column and pin bar replace; with them on, two footers and two
+pinned prompts compete for the same rows:
 
 ```json
 {
-  "previewLines": 0
+  "previewLines": 0,
+  "enableCustomFooter": false,
+  "stickyUserMessage": false
 }
 ```
+
+Reviewed for 1.0.2 (2026-10-12): no install scripts and no network calls; the one new
+subprocess is `git` for the footer's diff stats, which the setting above turns off.
 
 Install only **one** package that changes how tool calls are drawn. `better-claude-code-ui`,
 `pi-tool-display`, `pi-claude-code-ui` and similar packages conflict with this one.
@@ -411,9 +419,9 @@ This adds a Claude Code-style `Agent` tool (Explore / Plan / general-purpose), `
 mentions, and a live list of running agents. `pi-cc-extensions` already draws its tool rows.
 
 ```bash
-npm view @tintinweb/pi-subagents@0.19.0 dist.integrity
-# expect: sha512-DZsU33Urfb9dhEsJmsmpx0dayIHMYUbxng6AA7B6+bIgspNcTckcSnQRsbrv+QCS7jVKYJTzHIT/j1SU2B/nVQ==
-pi install npm:@tintinweb/pi-subagents@0.19.0
+npm view @tintinweb/pi-subagents@0.21.0 dist.integrity
+# expect: sha512-4hivkYVRaOvqF3MPA95WrBrXC3Ur6T5boJB5wMAnRL6+d4dnU892tvADefhkq/krLsdoYiBb4EIMBcTop803Ig==
+pi install npm:@tintinweb/pi-subagents@0.21.0
 ```
 
 Create `~/.pi/agent/subagents.json`. **These limits matter because the GPU is shared**:
@@ -457,8 +465,8 @@ printf 'def add(a, b):\n    return a - b\n\ndef mul(a, b):\n    return a * b\n' 
    `pi --no-session -p "Use the Agent tool (subagent_type Explore, run_in_background false) to find which function in calc.py is buggy. Do not read the file yourself. Then tell me in one sentence what it found."`
    It should name `add`.
 4. **Interactive UI.** Ask the user to run `pi` and confirm:
-   - The startup header's `[Extensions]` line lists `@tintinweb/pi-subagents@0.19.0…` and
-     `pi-cc-extensions@0.8.71`, and — once Part 2 is installed — this profile's package with
+   - The startup header's `[Extensions]` line lists `@tintinweb/pi-subagents@0.21.0…` and
+     `pi-cc-extensions@1.0.2`, and — once Part 2 is installed — this profile's package with
      `code-panels.ts` among its extensions, **once**. A second `code-panels.ts` means a stray copy
      in `~/.pi/agent/extensions/`; delete it.
    - Asking for a Python snippet shows a tinted panel labelled `python`, with no ``` lines.

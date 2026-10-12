@@ -106,6 +106,7 @@ These are not style preferences. Each one is a bug that already happened, twice 
   not just conclusion.
 - **hpc-bridge as a packaged tool**: [[investigations/hpc-bridge-integration]] — what the plugin is,
   what Pi offers to meet it, three options and a recommendation. Nothing built yet.
+- **Pre-demo upgrade and stability review, 12 Oct 2026**: [[investigations/review-2026-10-12]] — Pi 1.1.0, pi-cc 1.0.2, pi-subagents 0.21.0; a 17 s startup freeze, a process-exit path in `/argo up`, subagents switching the hover guard off, and eleven smaller fixes.
 - **Full review, 22 Sept 2026**: [[investigations/review-2026-09-22]] — five highs, seventeen mediums,
   every one verified against the code, and all closed the same day except one unverified low. Read
   it for the host facts it established and for the shape of the bugs this codebase tends to grow.

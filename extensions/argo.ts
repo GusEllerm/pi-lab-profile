@@ -484,9 +484,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	};
 	const base = () => `http://127.0.0.1:${cfg?.port ?? 44497}`;
 
-	async function health(): Promise<boolean> {
+	async function health(timeoutMs = 3000): Promise<boolean> {
 		try {
-			const res = await fetch(`${base()}/health`, { signal: AbortSignal.timeout(3000) });
+			const res = await fetch(`${base()}/health`, { signal: AbortSignal.timeout(timeoutMs) });
 			return res.ok && /healthy/.test(await res.text());
 		} catch {
 			return false;
@@ -494,11 +494,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	}
 
 	/** Read the catalogue and register both providers; idempotent. */
-	async function register(): Promise<number> {
+	async function register(timeoutMs = 10_000): Promise<number> {
 		if (!cfg) throw new Error("no ~/.config/argo-tools/config — run argo-setup first");
-		const res = await fetch(`${base()}/v1/models`, { signal: AbortSignal.timeout(10_000) });
+		const res = await fetch(`${base()}/v1/models`, { signal: AbortSignal.timeout(timeoutMs) });
 		if (!res.ok) throw new Error(`/v1/models: HTTP ${res.status}`);
 		const payload = (await res.json()) as { data?: { id: string }[] };
+		// awaited the network: a /reload or session switch meanwhile leaves a stale `pi` that throws
+		if (dead) throw new Error("session ended while the catalogue loaded");
 		models = order(dedupe((payload.data ?? []).map((m) => m.id))).filter((id) => !unavailable.has(id));
 		const p = providers(models, cfg, pricing);
 		pi.registerProvider("argo", p.argo as never);
@@ -584,16 +586,34 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		emit("argo:health", { up, port: cfg?.port, models: models.length });
 	}
 
-	// Startup: use the tunnel if it is already up; never open it. The price table loads alongside
-	// the health probe -- it is a python import of argo-dash, ~50 ms, and must precede register().
-	const [alive, table] = await Promise.all([cfg ? health() : Promise.resolve(false), loadPricing()]);
-	pricing = table;
-	if (alive) {
-		try {
+	// Startup: use the tunnel if it is already up; never open it. Pi awaits every extension's
+	// factory in turn, on every start, /new, /resume, /fork and /reload -- and pi-subagents runs
+	// them again for each subagent -- so nothing here may wait on the network for long. A healthy
+	// tunnel answers /health in well under a second (a local hop and one SSH round trip), so
+	// startup waits 800 ms for it and 3 s for the catalogue; anything slower (a half-open forward
+	// after sleep or a Wi-Fi change) is finished in the background, where registering at runtime
+	// works exactly as /argo up does. The price table is a python import of argo-dash, loaded once
+	// per process and shared by every activation.
+	const g = globalThis as Record<symbol, Promise<Pricing> | undefined>;
+	const PRICING_KEY = Symbol.for("pi-lab-profile:argo-pricing");
+	pricing = await (g[PRICING_KEY] ??= loadPricing());
+	const background = () => {
+		(async () => {
+			if (dead || registered || !cfg || !(await health(5000)) || dead || registered) return;
 			await register();
-		} catch (e) {
+		})().catch((e) => {
 			lastError = e instanceof Error ? e.message : String(e);
-		}
+		});
+	};
+	if (cfg) {
+		if (await health(800)) {
+			try {
+				await register(3000);
+			} catch (e) {
+				lastError = e instanceof Error ? e.message : String(e);
+				background();
+			}
+		} else background();
 	}
 
 	// The proxy streams Claude's prompt tokens as 0; put Pi's estimate there so the context gauge,
@@ -653,8 +673,19 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			let buffer = "";
 			let asking = false;
 			let announced = "";
+			// the Duo dialog, dismissed if argo-up goes away while it is open
+			const dialog = new AbortController();
+			const say = (text: string, kind: "info" | "warning" | "error") => {
+				if (dead) return;
+				try {
+					ctx.ui.notify(text, kind);
+				} catch {
+					// a session replaced under us: nothing left to tell
+				}
+			};
 			const timer = setTimeout(() => {
-				ctx.ui.notify("argo: argo-up did not finish within 3 minutes; stopping it", "error");
+				say("argo: argo-up did not finish within 3 minutes; stopping it", "error");
+				dialog.abort();
 				proc.kill("SIGTERM");
 			}, 180_000);
 			const onData = (d: Buffer) => {
@@ -663,9 +694,9 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				const lines = buffer.split("\n");
 				for (const line of lines.slice(0, -1)) {
 					const t = line.trim();
-					if (t && t !== announced && !dead) {
+					if (t && t !== announced) {
 						announced = t;
-						ctx.ui.notify(t.replace(/^\[argo-up\]\s*/, "argo-up: "), /❌|failed|denied/i.test(t) ? "error" : "info");
+						say(t.replace(/^\[argo-up\]\s*/, "argo-up: "), /❌|failed|denied/i.test(t) ? "error" : "info");
 					}
 				}
 				buffer = lines[lines.length - 1];
@@ -673,16 +704,20 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				if (prompt && !asking && !dead) {
 					asking = true;
 					void ctx.ui
-						.input(prompt, /option/i.test(prompt) ? "1 for a Duo push" : "")
+						.input(prompt, /option/i.test(prompt) ? "1 for a Duo push" : "", { signal: dialog.signal })
 						.then((answer) => {
+							if (dead || dialog.signal.aborted || proc.exitCode !== null) return;
 							if (answer === undefined) {
-								ctx.ui.notify("argo: cancelled", "warning");
+								say("argo: cancelled", "warning");
 								proc.kill("SIGTERM");
 								return;
 							}
 							proc.stdin?.write(`${answer}\n`);
 							buffer = "";
-							if (/option|passcode/i.test(prompt)) ctx.ui.notify("argo: approve the Duo push on your phone…", "info");
+							if (/option|passcode/i.test(prompt)) say("argo: approve the Duo push on your phone…", "info");
+						})
+						.catch(() => {
+							// a dialog torn down by /reload or a session switch: argo-up's own timeout ends it
 						})
 						.finally(() => {
 							asking = false;
@@ -691,27 +726,30 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			};
 			proc.stdout?.on("data", onData);
 			proc.stderr?.on("data", onData);
-			proc.on("error", (e) => {
-				if (!dead) ctx.ui.notify(`argo: could not run argo-up: ${e.message}`, "error");
-			});
+			proc.on("error", (e) => say(`argo: could not run argo-up: ${e.message}`, "error"));
 			proc.on("close", (code) => {
 				clearTimeout(timer);
+				dialog.abort();
 				child = undefined;
-				void (async () => {
-					if (dead) return resolve();
-					if (code !== 0) {
-						ctx.ui.notify(`argo: argo-up exited ${code} — see the lines above; argo-netcheck diagnoses the bastion`, "error");
-						return resolve();
-					}
+				// Runs from a child-process callback: anything thrown here is an uncaught rejection that
+				// takes Pi down, and register() awaits the network, during which /new, /resume or
+				// /reload can make this activation stale. So `dead` is checked after the await too, and
+				// the whole continuation is caught.
+				(async () => {
+					if (dead) return;
+					if (code !== 0) return say(`argo: argo-up exited ${code} — see the lines above; argo-netcheck diagnoses the bastion`, "error");
 					try {
 						const n = await register();
-						ctx.ui.notify(`argo: up on localhost:${cfg?.port} · ${n} models registered — /model to pick one`, "info");
+						say(`argo: up on localhost:${cfg?.port} · ${n} models registered — /model to pick one`, "info");
 					} catch (e) {
 						const cause = (e as { cause?: { message?: string } })?.cause?.message;
-						ctx.ui.notify(`argo: tunnel up but the catalogue failed: ${e instanceof Error ? e.message : String(e)}${cause ? ` (${cause})` : ""} — /argo reload retries`, "error");
+						say(`argo: tunnel up but the catalogue failed: ${e instanceof Error ? e.message : String(e)}${cause ? ` (${cause})` : ""} — /argo reload retries`, "error");
 					}
-					resolve();
-				})();
+				})()
+					.catch(() => {
+						// stale activation: the next session's startup registers from the live tunnel
+					})
+					.finally(resolve);
 			});
 		});
 	}

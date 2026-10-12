@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import layer, { IDLE_S, applyResult, describe, findPluginSkill, hpcPrefix, installSkill, isFresh, looksLikeCredential, parseResult, readMcpServers, skillText, toolPrefix } from "../extensions/hpc-bridge.ts";
+import layer, { IDLE_S, applyResult, looksLikeInlineSecret, describe, findPluginSkill, hpcPrefix, installSkill, isFresh, looksLikeCredential, parseResult, readMcpServers, skillText, toolPrefix } from "../extensions/hpc-bridge.ts";
 import { readFileSync, utimesSync } from "node:fs";
 
 function fakePi() {
@@ -126,7 +126,7 @@ test("the spend gate: declined blocks, accepted allows, confirm_spend=false neve
 
 		const guarded = await call({ type: "tool_call", toolCallId: "5", toolName: "mcp__hpc__run_shell", input: { command: "export API_KEY=abc && ./run" } }, ctx(true));
 		assert.equal(guarded.block, true, "the credential guard covers run_shell");
-		const bash = await call({ type: "tool_call", toolCallId: "6", toolName: "bash", input: { command: "PASSWORD=x ./thing" } }, ctx(true));
+		const bash = await call({ type: "tool_call", toolCallId: "6", toolName: "bash", input: { command: "PASSWORD=hunter2hunter2 ./thing" } }, ctx(true));
 		assert.equal(bash.block, true, "and bash");
 		const clean = await call({ type: "tool_call", toolCallId: "7", toolName: "mcp__hpc__login_shell", input: { command: "sinfo -s" } }, ctx(true));
 		assert.equal(clean, undefined);
@@ -281,4 +281,40 @@ test("resources_discover advertises the skill only when the server is configured
 		if (savedCache === undefined) delete process.env.UV_CACHE_DIR; else process.env.UV_CACHE_DIR = savedCache;
 		rmSync(cache, { recursive: true, force: true }); restore();
 	}
+});
+
+test("polling while the block provisions does not re-ask: a fresh provisioning result is live", async () => {
+	const restore = withConfig("hpc");
+	try {
+		const pi = fakePi();
+		layer(pi);
+		const call = pi.handlers.get("tool_call");
+		const result = pi.handlers.get("tool_result");
+		const asked = [];
+		const ctx = { hasUI: true, ui: { confirm: async (title) => { asked.push(title); return true; } } };
+		assert.equal(await call({ type: "tool_call", toolCallId: "1", toolName: "mcp__hpc__ensure_endpoint_up", input: { confirm_spend: true } }, ctx), undefined);
+		assert.equal(asked.length, 1, "the first allocation asks");
+		result({ type: "tool_result", toolCallId: "1", toolName: "mcp__hpc__ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"provisioning","block_state":"provisioning","session_spend":0}' }] });
+		for (let i = 0; i < 3; i++) {
+			assert.equal(await call({ type: "tool_call", toolCallId: `p${i}`, toolName: "mcp__hpc__ensure_endpoint_up", input: {} }, ctx), undefined);
+			result({ type: "tool_result", toolCallId: `p${i}`, toolName: "mcp__hpc__ensure_endpoint_up", isError: false, content: [{ type: "text", text: '{"status":"provisioning","block_state":"provisioning"}' }] });
+		}
+		assert.equal(asked.length, 1, "three polls while provisioning: no Restart dialog");
+		assert.equal(isFresh({ block: "provisioning", at: 0 }, (IDLE_S + 1) * 1000), false, "but a provisioning result goes stale like a warm one");
+	} finally { restore(); }
+});
+
+test("local bash is blocked only for a literal secret, never for everyday commands that mention the words", () => {
+	for (const bad of ["export PASSWORD=hunter2hunter2", "curl -H 'api_key: sk3f9a8b7c6d5e'", "TOKEN='ghp_1234abcd5678'", "mysql --password=Pa55word99"])
+		assert.equal(looksLikeInlineSecret(bad), true, bad);
+	for (const ok of [
+		'grep -n "apiKey:" extensions/argo.ts',
+		'rg "secret:" config/',
+		"python3 - <<'EOF'\ntoken = os.environ['GITHUB_TOKEN']\nEOF",
+		'sed "s/token: old/token: new/" f.yml',
+		"export TOKEN=$(cat ~/.token)",
+		'TOKEN="${GITHUB_TOKEN}" ./run',
+		"apiKey: cfg.user,",
+		"export TOKEN_FILE=/run/secrets/t",
+	]) assert.equal(looksLikeInlineSecret(ok), false, ok);
 });

@@ -5,7 +5,7 @@ endpoints: a right-hand status column instead of a crowded footer, an interactiv
 can **attach** to, and a `/round` command that puts a change through **dev → review → critique**
 with each role on a different model.
 
-Built against **Pi 0.86.1** and verified on **0.87.0** on macOS.
+Built against **Pi 0.86.1**; verified on **1.1.0** on macOS (12 Oct 2026), with pi-cc-extensions 1.0.2 and pi-subagents 0.21.0.
 
 ```bash
 pi install git:github.com/GusEllerm/pi-lab-profile
@@ -190,12 +190,12 @@ upstream fixed a bug this profile works around, and the workaround should be del
 
 ## Requires
 
-- Pi ≥ 0.86.0
+- Pi ≥ 1.1.0 (pi-subagents 0.20 and later require it)
 - [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents) for `/round` and `/fleet`,
   with `"widgetMode": "off"` and `"fleetView": false` in `~/.pi/agent/subagents.json` — this profile
   replaces both of its panels. A **project** `.pi/subagents.json` overrides the global one; if the
   old widget reappears, that is why, and `/fleet takeover` fixes it.
-- `pi-cc-extensions` is optional but assumed by the screenshots (collapsed thinking, compact tool rows).
+- `pi-cc-extensions` is optional but assumed by the screenshots (collapsed thinking, compact tool rows). From 0.9 it ships its own footer and sticky prompt; set `"enableCustomFooter": false, "stickyUserMessage": false` in `~/.pi/agent/pi-cc-extensions.json` so this profile's column and pin bar own those rows.
 
 ## Developing it
 

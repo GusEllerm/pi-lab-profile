@@ -1,6 +1,6 @@
 ---
 source: extensions/hpc-bridge.ts
-source-hash: 869f92656725c739787f03fe9ea5a0eed6c36cc9
+source-hash: b6dfbe7e50e80f67dc30857b887333f196ee2663
 documented: 2026-09-22
 ---
 
@@ -17,7 +17,13 @@ Pi reads the same `mcp.json` (`mcpServers` key), names the tools `mcp__<server>_
 
 **The skill is the plugin's, not ours.** hpc-bridge bundles `skills/driving-hpc/SKILL.md` into its
 wheel as `hpc_bridge/_guidance/SKILL.md`, and uvx keeps every installed version in uv's cache
-(`UV_CACHE_DIR`, else `~/.cache/uv`). At load, `findPluginSkill` takes the newest of those,
+(`UV_CACHE_DIR`, else `~/.cache/uv`). `findPluginSkill` looks only where uvx unpacks a wheel —
+`archive-v0/<hash>/hpc_bridge/…` and `archive-v0/<hash>/lib/python3.x/site-packages/hpc_bridge/…` —
+and takes the newest; the first version walked the whole cache, which on a 37 GB cache of 3,431
+archives took 16–19 s, synchronously, on every start and `/reload` (startup measured 17.8 s with
+it, 2.4–4.2 s without, 12 Oct 2026). At load the copy installed last time is advertised as is; only a
+first-ever run does the ~0.3 s lookup inline, and `findPluginSkillAsync` refreshes it 3 s after
+load without blocking, so a new release reaches the next start. Of the copies found,
 `skillText` re-emits the frontmatter as quoted YAML — upstream's `description:` contains `: ` and
 Pi's parser reports it as a skill conflict — and `installSkill` writes it to
 `<agent-dir>/cache/hpc-bridge/driving-hpc/SKILL.md`, advertised through `resources_discover`.
@@ -35,8 +41,12 @@ git:github.com/globus-labs/hpc-bridge` loads the skill natively.
   outright** unless `PI_HPC_HEADLESS_SPEND=allow` — verified live: a `pi -p` asked to call it with
   `confirm_spend=true` was blocked inside Pi; nothing reached the server.
 - **The credential guard.** hpc-bridge's `hooks/credential-guard.sh` pattern
-  (`(password|api[_-]?key|secret|token)\s*[=:]`, case-insensitive) refuses `bash`, `run_shell` and
+  (`(password|api[_-]?key|secret|token)\s*[=:]`, case-insensitive) refuses `run_shell` and
   `login_shell` commands that carry an inline secret. `TOKEN_FILE=` passes; `TOKEN=` does not.
+  **Local `bash` gets a stricter test** (`looksLikeInlineSecret`, 12 Oct 2026): the key must be
+  followed by a literal of eight or more characters containing a digit, not a variable, subshell or
+  env lookup. The plain pattern blocked everyday commands — `grep -n "apiKey:" extensions/argo.ts`,
+  `rg "secret:"`, a heredoc reading `token = os.environ[…]` — which is the kind of thing a demo does.
 - **The `hpc` slot.** `tool_result` events for `<prefix>*` tools are parsed with `parseResult` (the
   first JSON object in the text — hpc-bridge returns its pydantic models as JSON) and folded by
   `applyResult` into a state shaped after `EndpointStatus`, `ConnectFacilityResult` and
@@ -67,6 +77,11 @@ shape after spend was confirmed this session when the block is not provably warm
 window. The dialog then says *Restart*, names how long since the last news, and explains that the
 block may have idled out. Fresh warmth (a warm result within `IDLE_S`, 600 s) lets commands flow
 without asking.
+
+**Provisioning counts as live** (12 Oct 2026). `isFresh` accepts a recent `provisioning` result as
+well as a `warm` one: a block being allocated is one the server will not start twice, and the
+driving-hpc skill tells the model to keep polling `ensure_endpoint_up` while it provisions — with
+only `warm` trusted, every such poll asked "Restart a billed compute block?".
 
 **Warmth has a TTL.** There is no read-only status probe in hpc-bridge: `ensure_endpoint_up` runs a
 canary task on every call (`force_canary=True`) and re-provisions a cold block once spend was

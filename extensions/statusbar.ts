@@ -1057,7 +1057,9 @@ export default function (pi: ExtensionAPI): void {
 		hoverWrapper?: ViewportHandler;
 	};
 	const sink: Sink = ((globalThis as Record<symbol, unknown>)[SINK] ??= {}) as Sink;
-	sink.prof = prof;
+	// Claimed in mountSidebar, not here: pi-subagents runs every extension factory again, in this
+	// process, for each subagent -- a child with no UI that took the sink at load would reroute the
+	// profiler and switch the hover guard off for the session that does have one.
 	function instrumentFrames(tui: TUI): void {
 		const t = tui as unknown as {
 			[FRAME_HOOK]?: FrameHook;
@@ -1169,7 +1171,7 @@ export default function (pi: ExtensionAPI): void {
 	 * reload repoints it rather than rebuilding it, and wrapping our own wrapper is excluded by the
 	 * first case before any capture happens.
 	 */
-	sink.suppressHover = (data: string) => {
+	const suppressHover = (data: string) => {
 		if (!onlyMotion(data)) return false; // keys, presses, releases and wheel pass straight through
 		const p = sink.prof;
 		if (p) p.motionChunks++;
@@ -1206,6 +1208,9 @@ export default function (pi: ExtensionAPI): void {
 	function mountSidebar(tui: TUI): void {
 		if (dead) return; // reached from setTimeout(0) sites: a timer straddling a reload would re-mount the dead column and take hook.onRoot from the live one
 		if (!isViewportTUI(tui)) return;
+		// only an activation with a real TUI gets here: take the process-wide hooks for this one
+		sink.prof = prof;
+		sink.suppressHover = suppressHover;
 		instrumentFrames(tui);
 		guardHover();
 		if (!sidebarWanted) return;

@@ -12,7 +12,6 @@
     "extensions",
     "agents",
     "profiles",
-    "skills",
     "scripts",
     "docs",
     "README.md"
@@ -30,15 +29,12 @@
       "./extensions/liveness.ts",
       "./extensions/hpc-bridge.ts",
       "./extensions/argo.ts"
-    ],
-    "skills": [
-      "./skills"
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=1.0.0",
-    "@earendil-works/pi-coding-agent": ">=1.0.0",
-    "@earendil-works/pi-tui": ">=1.0.0"
+    "@earendil-works/pi-ai": ">=1.1.0",
+    "@earendil-works/pi-coding-agent": ">=1.1.0",
+    "@earendil-works/pi-tui": ">=1.1.0"
   },
   "scripts": {
     "check": "bash scripts/check.sh",
