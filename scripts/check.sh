@@ -59,4 +59,12 @@ else
 	echo "boot: clean (pi replied)"
 fi
 rm -f "$log"
+
+# The headless boot above never draws the TUI, so a bug that only fires while rendering passes it
+# (13 Oct 2026: the fleet ticker threw on the first frame, every test green). Start the real TUI.
+if command -v python3 >/dev/null; then
+	python3 "$repo/scripts/tui-smoke.py" || fail=1
+else
+	echo "tui: skipped (python3 not on PATH)"
+fi
 exit $fail

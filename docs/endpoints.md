@@ -17,7 +17,7 @@ HPC compute (hpc-bridge) is not inference and has its own page: [hpc.md](hpc.md)
 | endpoint | what you set up | who grants it | check |
 |---|---|---|---|
 | **Lab GPUs** | a `Host globus1` block in `~/.ssh/config` with your cluster username and key; `ssh globus1 true` must succeed without a prompt (or set `GLOBUS_TUNNEL_HOST=<user>@<host>`), plus the `pi()` launcher from [setup-guide.md §6](setup-guide.md#6-the-launcher-function) | a cluster account, from the lab | `pi --no-session -p "Reply with just: ok" </dev/null` opens the tunnel and prints `ok` |
-| **ALCF** | `uvx alcf-ai auth login` once, in a browser; the refresh token lasts about six months idle. `models.json` runs `~/.local/bin/alcf-token` per request, so nothing secret sits in config | gateway access under your Globus identity, from ALCF | `alcf-token --status`, then `/endpoints` |
+| **ALCF** | `uvx --from "alcf-ai==0.10.0" alcf-ai auth login` once, in a browser; the refresh token lasts about six months idle. `models.json` runs `~/.local/bin/alcf-token` per request, so nothing secret sits in config | gateway access under your Globus identity, from ALCF | `alcf-token --status`, then `/endpoints` |
 | **Argo** | `git clone https://github.com/GusEllerm/argo-tools && cd argo-tools && ./argo-setup` | a CELS account with an SSH key and Duo, plus Argo Gateway API authorisation from your division's AIOps representative | `/argo up`, then `/argo` |
 
 ## Seeing what is reachable: `/endpoints`

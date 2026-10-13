@@ -126,7 +126,7 @@ it is done, then run the check.
 | endpoint | what the user does | check you run |
 |---|---|---|
 | **Lab GPUs** | Get a cluster account from the lab. Add a `Host globus1` block to `~/.ssh/config` with their cluster username and key (you may draft it; they confirm the hostname and username). The key must load without a prompt (agent or keychain). | `ssh -o BatchMode=yes globus1 true` succeeds; then `pi --no-session -p "Reply with just: ok" </dev/null` prints `ok` |
-| **ALCF gateway** | Run `uvx alcf-ai auth login` in their terminal and finish the login in the browser (once; it lasts about six months idle). | `~/.local/bin/alcf-token --status` reports credentials present |
+| **ALCF gateway** | Run `uvx --from "alcf-ai==0.10.0" alcf-ai auth login` in their terminal and finish the login in the browser (once; it lasts about six months idle). | `~/.local/bin/alcf-token --status` reports credentials present |
 | **Argo** | Obtain Argo Gateway API authorisation (their division's AIOps representative) and a CELS account with an SSH key and Duo. Then in a terminal: `git clone https://github.com/GusEllerm/argo-tools ~/Projects/argo-tools && cd ~/Projects/argo-tools && ./argo-setup` — it is interactive and asks for a Duo push. | `~/.config/argo-tools/config` exists; `curl -s -m 3 http://127.0.0.1:44497/health` answers `healthy` while their tunnel is up |
 | **HPC (hpc-bridge)** | Nothing in advance: the first time they ask the agent to use a facility, hpc-bridge opens a Globus login in their browser. | `pi mcp list` shows `hpc: connected, 12 tools` (the first run downloads hpc-bridge, so allow a minute) |
 

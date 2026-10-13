@@ -564,7 +564,7 @@ for 10 minutes, and prints it; `models.json` runs it **per request** through Pi'
 syntax, so nothing is ever stored in a config file:
 
 ```bash
-uvx alcf-ai auth login          # once, interactive, opens a browser
+uvx --from "alcf-ai==0.10.0" alcf-ai auth login          # once, interactive, opens a browser
 alcf-token --status             # cache age and whether credentials exist
 ```
 

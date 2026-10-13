@@ -60,7 +60,7 @@ there is no staging copy, so run the check *before* reloading.
 
 ```bash
 npm test                     # ~100 unit tests, plus the canaries when Pi and pi-cc are installed
-bash scripts/check.sh        # every extension parses; the lockfile matches package.json; Pi boots and replies
+bash scripts/check.sh        # parses; lockfile in sync; Pi boots and replies headless; the TUI comes up clean
 bash scripts/check-docs.sh   # which vault notes have drifted from the code they describe
 ```
 

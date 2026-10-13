@@ -353,7 +353,7 @@ export default function (pi: ExtensionAPI): void {
 
 	function ensureTicker(): void {
 		const active = !dead && roster().length > 0;
-		if (active && !ticker)
+		if (active && !ticker) {
 			ticker = setInterval(() => {
 				if (dead) {
 					clearInterval(ticker);
@@ -369,7 +369,9 @@ export default function (pi: ExtensionAPI): void {
 					ticker = undefined;
 				}
 			}, TICK_MS);
+			// an observer: never the reason a process stays alive
 			ticker.unref?.();
+		}
 		if (!active && ticker) {
 			clearInterval(ticker);
 			ticker = undefined;
