@@ -653,6 +653,8 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		if (dead || !registered) return;
 		void health().then((ok) => setUp(ok));
 	}, 30_000);
+	// an observer: it must never keep a process alive (a headless run, a test file) on its own
+	poll.unref?.();
 
 	/** argo-up inside a pty we own; its prompts become Pi input dialogs. */
 	async function runUp(ctx: ExtensionContext): Promise<void> {

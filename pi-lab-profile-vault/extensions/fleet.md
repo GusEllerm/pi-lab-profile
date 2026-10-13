@@ -1,6 +1,6 @@
 ---
 source: extensions/fleet.ts
-source-hash: f40228dfb86408f640aa74dc3480f1566462b3c2
+source-hash: d5f0d67d7d271869f973aab32a17cbd6eea228bc
 documented: 2026-09-20
 ---
 

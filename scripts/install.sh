@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Install the parts of this profile that Pi's package manifest cannot carry:
-# agent roles, and (optionally) a profile's models.json / rounds.json / bin helpers.
+# agent roles, and (optionally) a profile's config: models.json, mcp.json, rounds.json,
+# subagents.json, header.json, pi-cc-extensions.json and bin helpers.
 #
 #   scripts/install.sh              roles only — safe anywhere
 #   scripts/install.sh lab          roles + the globus/ALCF profile (lab machines)
@@ -31,6 +32,7 @@ case "$profile" in
 		copy "$here/profiles/lab/models.json" "$agent_dir/models.json"
 		copy "$here/profiles/lab/mcp.json" "$agent_dir/mcp.json"
 		copy "$here/profiles/lab/header.json" "$agent_dir/header.json"
+		copy "$here/profiles/lab/pi-cc-extensions.json" "$agent_dir/pi-cc-extensions.json"
 		mkdir -p "$HOME/.local/bin"
 		for f in "$here"/profiles/lab/bin/*; do copy "$f" "$HOME/.local/bin/$(basename "$f")"; chmod +x "$HOME/.local/bin/$(basename "$f")" 2>/dev/null || true; done
 		echo "  → needs: an 'ssh globus1' host alias, 'uvx alcf-ai auth login' once, uv on PATH for the hpc-bridge MCP server,"
@@ -39,6 +41,8 @@ case "$profile" in
 	example)
 		echo "Example profile"
 		copy "$here/profiles/example/rounds.json" "$agent_dir/rounds.json"
+		copy "$here/profiles/example/subagents.json" "$agent_dir/subagents.json"
+		copy "$here/profiles/example/pi-cc-extensions.json" "$agent_dir/pi-cc-extensions.json"
 		echo "  → edit $agent_dir/rounds.json to name models you actually have"
 		;;
 	"") echo "No profile requested; roles only. Pass 'lab' or 'example' for endpoint config." ;;

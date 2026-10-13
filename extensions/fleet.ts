@@ -369,6 +369,7 @@ export default function (pi: ExtensionAPI): void {
 					ticker = undefined;
 				}
 			}, TICK_MS);
+			ticker.unref?.();
 		if (!active && ticker) {
 			clearInterval(ticker);
 			ticker = undefined;

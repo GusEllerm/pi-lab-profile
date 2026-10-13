@@ -1,0 +1,5 @@
+{
+  "_comment": "The harness replaces pi-subagents' widget and list with its own fleet; with these on, both draw.",
+  "widgetMode": "off",
+  "fleetView": false
+}

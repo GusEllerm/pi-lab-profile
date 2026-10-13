@@ -1,6 +1,6 @@
 ---
 source: extensions/liveness.ts
-source-hash: 55e0ac5796878f39c465ffb4b7a7e0c84ae5133b
+source-hash: b3950efd70ff7b38c1a5d347c6c5f8a252d43a2d
 documented: 2026-10-04
 ---
 

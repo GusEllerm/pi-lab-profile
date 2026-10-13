@@ -1,5 +1,10 @@
 # Set up Pi for the globus inference endpoint
 
+> **Setting this up as a coding agent?** Follow [agent-setup.md](agent-setup.md) instead: it is the
+> current, shortest path, with a check after every step. This guide is the long-form reference —
+> the reasoning behind each choice, troubleshooting, and how to undo it all. Part 1 below builds by
+> hand what `scripts/install.sh lab` now installs for you.
+
 **For the coding agent doing the setup.** Your user has SSH access to the lab's **globus** cluster.
 Your job is to install [Pi](https://pi.dev), a terminal coding agent, and point it at the lab's
 shared model endpoint. When you finish, their setup should match one that was built and tested

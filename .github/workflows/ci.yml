@@ -14,6 +14,7 @@ on:
 jobs:
   parse:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,7 +30,10 @@ jobs:
         run: bash scripts/check.sh --parse-only
 
       - name: Unit tests
-        run: node --test tests/*.test.ts tests/*.test.mjs
+        # A test that leaves a timer alive after failing used to hang here for hours, showing as
+        # "in progress" instead of as the failure. The observer timers are unref'd now; these limits
+        # (per test, and per job above) make any new hang fail within minutes.
+        run: node --test --test-timeout=120000 tests/*.test.ts tests/*.test.mjs
 
       - name: Agent roles carry no model pin
         # Endpoints belong in rounds.json; a pin here would break every machine but its author's.
@@ -48,6 +52,7 @@ jobs:
     # Only on the schedule (and by hand): it installs Pi, which the push job has no need of.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

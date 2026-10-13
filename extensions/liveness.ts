@@ -345,6 +345,7 @@ export default function (pi: ExtensionAPI): void {
 				// a timing cache that cannot be written is a timing cache that starts over
 			}
 		}, 5000);
+		saveTimer.unref?.();
 	};
 
 	const primary = new LivenessModel(timings);
@@ -409,6 +410,8 @@ export default function (pi: ExtensionAPI): void {
 			}
 			publish();
 		}, TICK_MS);
+		// an observer: never the reason a process stays alive (a failed test used to hang on it)
+		ticker.unref?.();
 	};
 
 	// the primary session, through Pi's own events

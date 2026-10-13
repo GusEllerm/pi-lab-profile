@@ -1,0 +1,7 @@
+{
+  "_comment": "pi-cc-extensions draws the transcript; Globus Harness owns the footer, the pinned prompt and the header, so pi-cc's own are off. previewLines 0 collapses thinking to one line.",
+  "previewLines": 0,
+  "enableCustomFooter": false,
+  "stickyUserMessage": false,
+  "showStartupHeader": false
+}

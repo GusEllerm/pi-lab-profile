@@ -180,8 +180,8 @@ test("the extension: a stalled primary is told once per episode, the row stays q
 		const slot = () => emitted.filter(([e, p]) => e === "statusbar:slot" && p.id === "liveness").at(-1)[1];
 		assert.equal(slot().state, "idle");
 		handlers.get("message_start")({ type: "message_start", message: { role: "assistant", provider: "globus" } });
-		handlers.get("session_shutdown")();
 	} finally {
+		handlers.get("session_shutdown")?.();
 		if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = savedDir;
 	}
 	assert.equal(notes.length, 0, "nothing said while the wait is within normal");
@@ -214,17 +214,19 @@ test("subagents: started may precede created, the session may appear late, and e
 		const marks = () => emitted.filter(([e]) => e === "liveness:agents").at(-1)?.[1] ?? {};
 		// the session appears; the ticker's retry subscribes
 		sessions.set("a1", { subscribe: (fn) => { listener = fn; return () => { listener = undefined; }; } });
-		await new Promise((r) => setTimeout(r, 2300));
+		// poll up to a deadline rather than sleep a fixed time: a slow CI runner can miss a 2 s tick
+		const until = async (ok, ms = 10_000) => { const end = Date.now() + ms; while (!ok() && Date.now() < end) await new Promise((r) => setTimeout(r, 50)); };
+		await until(() => listener !== undefined && marks().a1 !== undefined);
 		assert.ok(listener, "the ticker subscribed once the session existed");
 		assert.notEqual(marks().a1?.level, undefined);
 		assert.doesNotMatch(marks().a1.summary, /queued/, "created after started never downgrades to queued");
 		listener({ type: "tool_execution_start", toolCallId: "t", toolName: "bash", args: { command: "ls" } });
-		await new Promise((r) => setTimeout(r, 2100));
+		await until(() => /bash running/.test(marks().a1?.summary ?? ""));
 		assert.match(marks().a1.summary, /bash running/, "the subagent's own events drive its verdict");
 		bus.get("subagents:completed")({ id: "a1" });
 		assert.equal(listener, undefined, "unsubscribed when it finishes");
-		handlers.get("session_shutdown")();
 	} finally {
+		handlers.get("session_shutdown")?.();
 		globalThis[KEY] = savedRegistry;
 		if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = savedDir;
 	}

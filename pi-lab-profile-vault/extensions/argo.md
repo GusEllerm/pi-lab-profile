@@ -1,6 +1,6 @@
 ---
 source: extensions/argo.ts
-source-hash: b38362b5ccb381e6d48d1820b336a0fe6adfa100
+source-hash: a9f03d886e7521b3cd2439a05bb8ec2385ed1a53
 documented: 2026-09-23
 ---
 
