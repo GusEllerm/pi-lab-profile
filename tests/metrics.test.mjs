@@ -47,6 +47,7 @@ test("SpeedMeter: a trickled stream is a real rate; a reply that lands at once i
 		b.start();
 		t += 300; b.update({ usage: { output: 0 }, content: [{ text: "x".repeat(4000) }] }); // one burst, counted as chars/4
 		t += 100; b.update({ usage: { output: 0 }, content: [{ text: "x".repeat(4000) }] });
+		t += 300; // past the meter's 200 ms floor for a measurable reply; the samples still span only 100 ms
 		b.end({ usage: { output: 1000 } });
 		assert.equal(b.read().buffered, true, "1000 tokens inside 100 ms of samples is delivery, not generation");
 		assert.equal(b.read().estimated, true, "counts came from chars/4");
