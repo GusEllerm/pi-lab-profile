@@ -152,7 +152,7 @@ export function unreachable(why: string): boolean {
  * guards /models would otherwise read "down" while chat works -- and the tunnel hint is given only
  * for the lab's `globus` provider, the one endpoint that sits behind globus-tunnel.
  */
-async function probeServer(ctx: ExtensionContext, provider: string, models: AnyModel[]): Promise<Row[]> {
+export async function probeServer(ctx: ExtensionContext, provider: string, models: AnyModel[]): Promise<Row[]> {
 	const base = models[0].baseUrl.replace(/\/$/, "");
 	let headers: Record<string, string> = {};
 	try {
@@ -179,7 +179,7 @@ async function probeServer(ctx: ExtensionContext, provider: string, models: AnyM
 	}
 }
 
-async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyModel[]): Promise<Row[]> {
+export async function probeAlcf(ctx: ExtensionContext, provider: string, models: AnyModel[]): Promise<Row[]> {
 	const base = models[0].baseUrl;
 	const marker = base.indexOf("/resource_server/");
 	// Without the marker the slice below would take the first sixteen characters of the URL as the

@@ -834,6 +834,9 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	const GC_KIND: Record<number, string> = { 1: "scavenge", 2: "MAJOR", 4: "incremental", 8: "weakcb" };
 	let gcObserver: PerformanceObserver | undefined;
+	/** Armed once, by the activation that draws: pi-subagents re-runs this factory for every subagent, and an observer per child ran on every GC for nothing (13 Oct 2026 review). */
+	const armGcObserver = (): void => {
+	if (gcObserver) return;
 	try {
 		gcObserver = new PerformanceObserver((list) => {
 			for (const entry of list.getEntries()) {
@@ -848,6 +851,7 @@ export default function (pi: ExtensionAPI): void {
 	} catch {
 		gcObserver = undefined; // no GC timings available: /prof simply will not mention them
 	}
+	};
 
 	/** Accounting for the frame currently being drawn; the mean frame is fine, the tail is not. */
 	let frame = { bytes: 0, rows: 0, writeMs: 0, full: false };
@@ -1179,6 +1183,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function install(ctx: ExtensionContext): void {
+		if (ctx.hasUI) armGcObserver();
 		if (!ctx.hasUI) return;
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			tuiRef = tui;
