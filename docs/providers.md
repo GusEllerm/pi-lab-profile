@@ -78,7 +78,11 @@ pi --no-session -p "Reply with just: ok" </dev/null   # it answers
 ```
 
 It also appears in `/endpoints`, probed with the same key, and in the column's `ENDPOINT` row by
-its `name`.
+its `name` — the part before ` · `, so `"name": "mine · vLLM on the lab box"` reads `mine`. Two
+optional keys Pi ignores but the harness reads:
+
+- **`"_hint": "run: my-tunnel up"`** — what `/endpoints` says when nothing answers at the server,
+  instead of the generic "nothing answers at <url>". The lab's entry names its tunnel command.
 
 ## Review rounds with your models
 

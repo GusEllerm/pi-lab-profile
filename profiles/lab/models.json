@@ -1,7 +1,8 @@
 {
   "providers": {
     "globus": {
-      "name": "globus cluster \u00b7 vLLM on globus3 via SSH tunnel (localhost:8000)",
+      "name": "globus3 \u00b7 vLLM via SSH tunnel (localhost:8000)",
+      "_hint": "tunnel down \u2014 run: globus-tunnel ensure",
       "baseUrl": "http://127.0.0.1:8000/v1",
       "api": "openai-completions",
       "apiKey": "sk-local",

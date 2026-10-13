@@ -3,6 +3,9 @@
 // rows the probes actually emit (the tree test checks the label format on hand-written rows).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { probeAlcf, probeServer, summarize } from "../extensions/endpoints.ts";
 
 const ctx = { modelRegistry: { getApiKeyForProvider: async (p) => (p === "noauth" ? undefined : `key-for-${p}`) } };
@@ -34,7 +37,12 @@ test("probeServer: served models read up, configured-but-absent read absent, ext
 	}
 });
 
-test("probeServer: a refusal is reported as the HTTP status; nothing listening is 'nothing answers', and only globus gets the tunnel hint", async () => {
+test("probeServer: a refusal is the HTTP status; nothing listening is 'nothing answers', or the provider's own _hint from models.json", async () => {
+	// the hint is data: the lab's entry names its tunnel command, anyone else's says what they like
+	const agentDir = mkdtempSync(join(tmpdir(), "probes-"));
+	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { globus: { name: "globus3 · vLLM via SSH tunnel", _hint: "tunnel down — run: globus-tunnel ensure" }, dead: { name: "Dead server" } } }));
+	const savedDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	const f = stubFetch([
 		["guarded", () => reply({ error: "bad key" }, 401)],
 		["127.0.0.1:8000", () => { throw Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }); }],
@@ -47,10 +55,13 @@ test("probeServer: a refusal is reported as the HTTP status; nothing listening i
 		assert.match(lab.label, /tunnel down — run: globus-tunnel ensure \(fetch failed \(ECONNREFUSED\)\)/);
 		const [own] = await probeServer(ctx, "dead", [model("dead", "m", "http://127.0.0.1:18099/v1")]);
 		assert.match(own.label, /nothing answers at http:\/\/127\.0\.0\.1:18099\/v1 \(Unable to connect/, "Bun's wording, from the standalone Pi");
-		assert.doesNotMatch(own.label, /globus-tunnel/);
+		assert.doesNotMatch(own.label, /globus-tunnel/, "no _hint: the generic message");
 		assert.equal(summarize([guarded, lab, own]), "3 down");
 	} finally {
 		f.restore();
+		if (savedDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = savedDir;
+		rmSync(agentDir, { recursive: true, force: true });
 	}
 });
 

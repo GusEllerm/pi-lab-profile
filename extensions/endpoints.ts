@@ -29,13 +29,16 @@ const PROBE_TIMEOUT_MS = 8000;
 type AnyModel = { id: string; provider: string; baseUrl: string };
 type Row = { label: string; model?: AnyModel; note?: string };
 
-function customProviderIds(): string[] {
+/** A provider's own entry in models.json; Pi ignores keys it does not know, so a profile can carry `_hint` for /endpoints. */
+type ProviderEntry = { name?: string; _hint?: string };
+function customProviders(): Record<string, ProviderEntry> {
 	try {
-		return Object.keys(JSON.parse(readFileSync(modelsJson(), "utf8")).providers ?? {});
+		return (JSON.parse(readFileSync(modelsJson(), "utf8")).providers ?? {}) as Record<string, ProviderEntry>;
 	} catch {
-		return [];
+		return {};
 	}
 }
+const customProviderIds = (): string[] => Object.keys(customProviders());
 
 function hostOf(url: string): string {
 	try {
@@ -174,7 +177,9 @@ export async function probeServer(ctx: ExtensionContext, provider: string, model
 		return rows;
 	} catch (e) {
 		const why = String((e as Error).message ?? e);
-		const hint = unreachable(why) && provider === "globus" ? `tunnel down — run: globus-tunnel ensure (${why})` : unreachable(why) ? `nothing answers at ${base} (${why})` : why;
+		// What to say when nothing is listening is the provider's to decide -- the lab's entry says
+		// which tunnel to start -- so it comes from `_hint` in models.json, not from the provider's name.
+		const hint = unreachable(why) ? `${customProviders()[provider]?._hint ?? `nothing answers at ${base}`} (${why})` : why;
 		return models.map((m) => ({ model: m, label: `? down    ${m.id}  (${hint})` }));
 	}
 }
@@ -431,7 +436,7 @@ export default function (pi: ExtensionAPI): void {
 			const cluster = model.baseUrl.split("/resource_server/")[1]?.split("/")[0] ?? "";
 			return `ALCF ${cluster.charAt(0).toUpperCase()}${cluster.slice(1)}`;
 		}
-		if (model.provider === "globus") return "globus3";
+		// the part of the provider's `name` before " · ": "globus3 · vLLM via SSH tunnel" reads globus3
 		return ctxRef ? endpointLabel(ctxRef, model).split(" · ")[0] : model.provider;
 	};
 	const publishTab = () => {

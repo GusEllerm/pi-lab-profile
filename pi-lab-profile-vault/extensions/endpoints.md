@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 23ef13830346921a2dfc08fa73b047562053fcd4
+source-hash: 5b615779c13e934136782878e4ea51bef17e237f
 documented: 2026-09-20
 ---
 
@@ -92,7 +92,7 @@ notifies instead of throwing; an unparseable URL returns itself from `hostOf`.
 
 **Status publication — `ctxRef`, `lastReply`, `shortName`, `publishTab`, `publishLabels`,
 `setEndpointStatus`.** `shortName` is where the naming convention lives: ALCF hosts become
-`ALCF <Cluster>` from the path segment, `globus` becomes `globus3`, anything else takes the first
+`ALCF <Cluster>` from the path segment, anything else takes the first
 segment of the registry display name before ` · `. `ctxRef` is the module's handle on the session and
 is refreshed on `session_start` and `model_select`; everything that publishes bails out if it is
 unset.
@@ -106,7 +106,7 @@ their framework reads as `api` and `alcfOffered` finds nothing under it. Those c
 never show "offered, not in models.json" rows — their live/queued/cold state still works, because
 that comes from `jobs`. Only Sophia (`…/sophia/vllm/v1`) matches a real framework key.
 
-**Probes — `getJson`, `probeServer`, `probeAlcf`.** (`probeServer` was `probeGlobus` until 13 Oct 2026: it now serves any OpenAI-compatible provider, sends the provider's own key — resolved through `modelRegistry.getApiKeyForProvider` — so a gateway that guards `/models` is not reported down while chat works, and gives the `globus-tunnel ensure` hint only for the `globus` provider; anyone else's unreachable server reads `nothing answers at <baseUrl>`. Found by an outsider-onboarding test. "Unreachable" is the exported `unreachable(why)`, which knows both runtimes' wording: Node's undici says `fetch failed` with the code on `cause`, but Pi's standalone binary — the [no-Node bundle](../../docs/no-node.md) — runs on Bun, whose fetch says `Unable to connect. Is the computer able to access the url?` with `ConnectionRefused` on the error's own `code`; `getJson` appends either. Before that, a bundle install never got the tunnel hint.) Each returns `Row[]`; a `Row` carries an optional
+**Probes — `getJson`, `probeServer`, `probeAlcf`.** (`probeServer` was `probeGlobus` until 13 Oct 2026: it now serves any OpenAI-compatible provider, sends the provider's own key — resolved through `modelRegistry.getApiKeyForProvider` — so a gateway that guards `/models` is not reported down while chat works, and gives the `globus-tunnel ensure` hint only for the `globus` provider; anyone else's unreachable server reads `nothing answers at <baseUrl>`. Found by an outsider-onboarding test. "Unreachable" is the exported `unreachable(why)`, which knows both runtimes' wording: Node's undici says `fetch failed` with the code on `cause`, but Pi's standalone binary — the [no-Node bundle](../../docs/no-node.md) — runs on Bun, whose fetch says `Unable to connect. Is the computer able to access the url?` with `ConnectionRefused` on the error's own `code`; `getJson` appends either. Before that, a bundle install never got the tunnel hint. Later the same day the two lab facts here became data: the tunnel hint is the provider's `_hint` in models.json (`customProviders()` reads the entry; Pi ignores the key -- checked with `pi --list-models`), and the `globus` → `globus3` label override is gone, the lab's `name` now leading with `globus3`. `ALCF_HOST` and `EXCLUDED` stay in code until a second lab with a different gateway exists -- a per-profile probe config was judged speculative with one lab.) Each returns `Row[]`; a `Row` carries an optional
 `model` (selectable) or an optional `note` (an id that exists on the cluster but is not configured).
 
 **The tree — `Section`, `TreeRow`, `summarize`, `treeRows`, `EndpointTree`, the `/endpoints`
