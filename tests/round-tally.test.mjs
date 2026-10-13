@@ -3,7 +3,20 @@
 // review found wrong (M3: prose counted as verdicts; M4: rejected findings handed back to dev).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tally, surviving } from "../extensions/rounds.ts";
+import { clip, tally, surviving } from "../extensions/rounds.ts";
+
+// The hand-back clips dev and review output; a cut inside a fenced block left the fence open and
+// the critique heading, verdict and report path after it rendered as code (13 Oct 2026 review).
+test("clip closes a fence it cut open, and leaves whole text and closed fences alone", () => {
+	assert.equal(clip("short", 100), "short");
+	const open = "intro\n```js\nconst a = 1;\nconst b = 2;\n```\nafter";
+	assert.equal(clip(open, open.length), open);
+	const cut = clip(open, 20); // lands inside the block
+	assert.match(cut, /^intro\n```js\nconst a\n```\n… \(\d+ more characters in the report\)$/);
+	const closed = clip(open, 44); // lands after the closing fence (40 would cut through it, which is rightly re-closed)
+	assert.doesNotMatch(closed, /```\n… /, "no spurious fence when the kept part is balanced");
+	assert.ok(clip("~~~\nx\n", 3).includes("\n```"), "tilde fences count too");
+});
 
 const critique = `I checked all three findings against the code.
 

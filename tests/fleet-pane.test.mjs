@@ -2,7 +2,17 @@
 // sizing a message by stringifying it cost 3.5 ms and 4 MB per frame with a screenshot in it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { contentSize } from "../extensions/fleet.ts";
+import { contentSize, uniqueLabels } from "../extensions/fleet.ts";
+
+// ctx.ui.select returns the chosen string and the item is found by indexOf: two agents with the
+// same description made "attach to the second" attach the first (13 Oct 2026 review).
+test("uniqueLabels keeps distinct rows as they are and numbers the repeats", () => {
+	assert.deepEqual(uniqueLabels(["dev running", "reviewer running"]), ["dev running", "reviewer running"]);
+	const labels = uniqueLabels(["reviewer running", "reviewer running", "critic running", "reviewer running"]);
+	assert.deepEqual(labels, ["reviewer running", "reviewer running (2)", "critic running", "reviewer running (3)"]);
+	assert.equal(labels.indexOf("reviewer running (2)"), 1, "a choice maps back to its own row");
+	assert.equal(new Set(labels).size, labels.length);
+});
 
 test("contentSize changes when the content grows, without serialising it", () => {
 	assert.equal(contentSize(undefined), "0");

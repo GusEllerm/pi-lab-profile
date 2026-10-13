@@ -63,6 +63,19 @@ function readConfig(cwd: string): RoundsConfig {
 }
 
 /**
+ * The first `n` characters of a phase's output, with a note of what was left out. A cut that lands
+ * inside a fenced block leaves the fence open, and everything after it in the hand-back -- the
+ * next heading, the verdict, the report path -- renders as code; so an odd number of fence lines
+ * in the kept part gets its closing fence back.
+ */
+export function clip(s: string, n: number): string {
+	if (s.length <= n) return s;
+	const kept = s.slice(0, n).trimEnd();
+	const fences = kept.split("\n").filter((line) => /^\s*(```|~~~)/.test(line)).length;
+	return `${kept}${fences % 2 ? "\n```" : ""}\n… (${s.length - n} more characters in the report)`;
+}
+
+/**
  * The critic's verdict words are the machine-readable part of its output: they build the verdict
  * line and decide whether another dev round runs. `agents/critic.md` asks for a closing
  * `TALLY: confirmed=N plausible=N rejected=N` line, and that is the authority when present. Without
@@ -413,7 +426,6 @@ export default function (pi: ExtensionAPI): void {
 			// What goes into the session is what the main model can act on: the critique in full, the
 			// other phases trimmed. The whole thing is on disk, and a round that pastes three agent
 			// transcripts into the context window has spent the budget it was meant to save.
-			const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n).trimEnd()}\n… (${s.length - n} more characters in the report)`);
 			pi.sendMessage(
 				{
 					customType: "rounds",

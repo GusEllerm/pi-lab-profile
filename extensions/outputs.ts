@@ -426,12 +426,14 @@ export default function (pi: ExtensionAPI): void {
 
 	function openInEditor(ctx: ExtensionContext, item: Item): void {
 		try {
+			// A tool result can hold anything the model read -- an .env, a token in a log -- and the
+			// temp dir is shared on a multi-user host: owner-only, both the directory and the files.
 			if (!dirMade) {
-				mkdirSync(dir, { recursive: true });
+				mkdirSync(dir, { recursive: true, mode: 0o700 });
 				dirMade = true;
 			}
 			const file = join(dir, item.suggestedName);
-			writeFileSync(file, item.text.endsWith("\n") ? item.text : `${item.text}\n`);
+			writeFileSync(file, item.text.endsWith("\n") ? item.text : `${item.text}\n`, { mode: 0o600 });
 			const cmd = editorCommand();
 			if (!cmd) return ctx.ui.notify(`Wrote ${file} — set $EDITOR to open it automatically.`, "info");
 			// A terminal editor needs this terminal, which pi owns; spawned detached with no TTY it

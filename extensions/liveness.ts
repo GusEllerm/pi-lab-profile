@@ -337,8 +337,16 @@ export default function (pi: ExtensionAPI): void {
 		if (saveTimer) return;
 		saveTimer = setTimeout(() => {
 			saveTimer = undefined;
+			// pi-subagents runs this factory again for every subagent, each with its own Timings
+			// loaded at spawn; if every activation wrote, the last writer won and the primary's
+			// samples since the spawn were lost. Only the activation with the UI persists.
 			try {
-				mkdirSync(join(agentDir, "cache"), { recursive: true });
+				if (!ctxRef?.hasUI) return;
+			} catch {
+				return; // a stale ctx after /reload: the new activation saves from now on
+			}
+			try {
+				mkdirSync(join(agentDir(), "cache"), { recursive: true });
 				writeFileSync(file, JSON.stringify(timings.toJSON()));
 			} catch {
 				// a timing cache that cannot be written is a timing cache that starts over

@@ -626,8 +626,22 @@ export default function (pi: ExtensionAPI): void {
 		};
 	}
 
+	/**
+	 * Context usage, read when it can change rather than when it is displayed. `getContextUsage()`
+	 * re-projects the whole session each call; in the memo key it ran on every frame, cache hit or
+	 * not -- the same mistake as the Intl.Segmenter key of 20 Sept, in a different coat.
+	 */
+	let contextUsage: ReturnType<ExtensionContext["getContextUsage"]>;
+	const refreshContext = (c: ExtensionContext) => {
+		try {
+			contextUsage = c.getContextUsage();
+		} catch {
+			// a stale ctx: keep the last reading
+		}
+	};
+
 	const sidebarKey = (width: number, c: ExtensionContext): string => {
-		const u = c.getContextUsage();
+		const u = contextUsage;
 		const att = attached?.stats();
 		const sp = speedText(speed.read()); // the formatted string is what is displayed, so key on it
 		return [
@@ -1387,7 +1401,7 @@ export default function (pi: ExtensionAPI): void {
 					}
 
 					// line 1: path on the left; model · thinking · context right-aligned and never cut
-					const u = c.getContextUsage();
+					const u = contextUsage;
 					const pct = u?.percent;
 					const ctxColor: Color = pct == null ? "dim" : pct >= 90 ? "error" : pct >= 75 ? "warning" : "muted";
 					const right =
@@ -1483,16 +1497,19 @@ export default function (pi: ExtensionAPI): void {
 			process.stdout.on("resize", scheduleResizeSettle);
 		}
 		usage = sumUsage(ctx);
+		refreshContext(ctx);
 		if (enabled) install(ctx);
 		pi.events.emit("statusbar:ready", {});
 	});
 	// message_end fires before Pi appends the message to the session, so re-sum once the turn is stored
 	pi.on("turn_end", (_event, ctx) => {
 		usage = sumUsage(ctx);
+		refreshContext(ctx);
 		rerender("turn_end");
 	});
 	pi.on("agent_end", (_event, ctx) => {
 		usage = sumUsage(ctx);
+		refreshContext(ctx);
 		rerender("agent_end");
 	});
 	pi.on("message_start", (event) => {
@@ -1512,7 +1529,14 @@ export default function (pi: ExtensionAPI): void {
 		if ((event.message as { role?: string })?.role === "assistant") speed.end(event.message as never);
 		rerender("message_end");
 	});
-	pi.on("model_select", () => rerender("model_select"));
+	pi.on("model_select", (_event, ctx) => {
+		refreshContext(ctx); // a different context window changes the percentage
+		rerender("model_select");
+	});
+	pi.on("session_compact", (_event, ctx) => {
+		refreshContext(ctx); // the one event where the percentage falls
+		rerender("session_compact");
+	});
 
 	pi.registerCommand("compat", {
 		description: "Which upstream workarounds are active, and why — see docs/upstream-hover-width.md",

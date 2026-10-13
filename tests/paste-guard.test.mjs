@@ -80,3 +80,25 @@ test("the extension consumes a burst and appends it to the editor after the quie
 	handlers.get("session_start")({}, { hasUI: false, ui: ctx.ui });
 	assert.equal(terminal, undefined, "no handler without a UI");
 });
+
+test("a burst ended by an escape sequence does not leave its timer armed against the next burst", async () => {
+	// Before 13 Oct 2026, flush() forgot the timer without clearing it: a cursor key mid-paste
+	// ended burst 1, burst 2 began, and burst 1's timer fired into it 40 ms later -- flushing a
+	// partial paste whose next keys then went to the editor unheld, "\r" included.
+	const handlers = new Map();
+	let terminal;
+	let editor = "";
+	const ctx = { hasUI: true, ui: { onTerminalInput: (h) => { terminal = h; return () => {}; }, getEditorText: () => editor, setEditorText: (t) => { editor = t; }, setStatus: () => {}, notify: () => {} } };
+	pasteGuard({ on: (e, h) => handlers.set(e, h) });
+	handlers.get("session_start")({}, ctx);
+	[..."abc"].forEach((ch) => terminal(ch)); // burst 1, timer armed
+	terminal("\x1b[A"); // ends it: "c" goes to the editor now
+	assert.equal(editor, "c");
+	await new Promise((r) => setTimeout(r, 10));
+	[..."def"].forEach((ch) => terminal(ch)); // burst 2 begins at +10 ms
+	await new Promise((r) => setTimeout(r, 35)); // +45 ms: burst 1's orphan would have fired at +40
+	assert.equal(editor, "c", "burst 2 is still held");
+	await new Promise((r) => setTimeout(r, 40)); // +85 ms: burst 2's own quiet window has passed
+	assert.equal(editor, "cf", "then it is flushed whole, once");
+	handlers.get("session_shutdown")();
+});

@@ -76,6 +76,9 @@ export default function (pi: ExtensionAPI): void {
 		const burst = new PasteBurst();
 		let explained = false;
 		const flush = () => {
+			// An escape sequence can end a burst early, with the quiet timer still armed; left alone,
+			// it fires into the *next* burst and flushes it before it is whole (13 Oct 2026 review).
+			if (timer) clearTimeout(timer);
 			timer = undefined;
 			const text = burst.flush();
 			if (!text) return;

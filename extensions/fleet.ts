@@ -225,6 +225,21 @@ function wrap(text: string, width: number): string[] {
  * keypress goes to theirs. Its /agents → Settings writes <cwd>/.pi/subagents.json, which overrides
  * ~/.pi/agent/subagents.json — so a project can silently switch them back on.
  */
+/**
+ * Picker rows that can be told apart. `ctx.ui.select` hands back the chosen *string*, and the
+ * choice is mapped to its item by index of that string -- so two agents with the same
+ * description (a round's two reviewers) used to make "attach to the second" attach the first.
+ * A repeated label gets a counter; the labels then round-trip through indexOf correctly.
+ */
+export function uniqueLabels(labels: string[]): string[] {
+	const seen = new Map<string, number>();
+	return labels.map((label) => {
+		const n = (seen.get(label) ?? 0) + 1;
+		seen.set(label, n);
+		return n === 1 ? label : `${label} (${n})`;
+	});
+}
+
 function subagentSurfaces(cwd: string): { on: boolean; projectFile: string } {
 	const projectFile = join(cwd, ".pi", "subagents.json");
 	const merged = { ...readJson(join(agentDir(), "subagents.json")), ...readJson(projectFile) };
@@ -455,6 +470,12 @@ export default function (pi: ExtensionAPI): void {
 	/** Sidebar/dashboard still read agents through statusbar's slot protocol. */
 	function publishSlot(): void {
 		const list = roster();
+		// The cache holds each agent's AgentSession -- its whole message branch. Nothing else ever
+		// removed an entry, so a day of rounds pinned every finished agent's transcript until exit
+		// (13 Oct 2026 review). Once the roster has forgotten an agent, so does the cache; a lookup
+		// for an agent still attached re-reads it from pi-subagents' record.
+		const keep = new Set(list.map((a) => a.id));
+		for (const id of liveCache.keys()) if (!keep.has(id)) liveCache.delete(id);
 		const running = list.filter((a) => (live(a.id)?.status ?? a.status) === "running").length;
 		const queued = list.filter((a) => (live(a.id)?.status ?? a.status) === "queued").length;
 		// refresh the ledger for agents still tracked; finished ones keep their last known figure
@@ -553,13 +574,13 @@ export default function (pi: ExtensionAPI): void {
 			let target = who ? movable.find((a) => a.id.startsWith(who) || name(a).toLowerCase().includes(who.toLowerCase())) : undefined;
 			if (!target && movable.length > 1) {
 				// one row per agent: what it is doing, where it runs now, and how far along it is
-				const labels = movable.map((a) => {
+				const labels = uniqueLabels(movable.map((a) => {
 					const info = live(a.id);
 					const on = nowOn(a);
 					const where = on ? endpointLabel(on) : "inherited";
 					const size = info?.tokens ? ` · ${fmt(info.tokens)} tok` : "";
 					return `${truncateToWidth(name(a), 34, "…").padEnd(34)}  ${where}${size} · ${secs(Date.now() - a.startedAt)}`;
-				});
+				}));
 				const choice = await ctx.ui.select("Move which agent?", labels);
 				target = choice ? movable[labels.indexOf(choice)] : undefined;
 			}
@@ -574,11 +595,11 @@ export default function (pi: ExtensionAPI): void {
 			if (!model) {
 				const current = nowOn(target);
 				// one row per endpoint+model: where it runs, its context window, and what is in use now
-				const labels = models.map((m) => {
+				const labels = uniqueLabels(models.map((m) => {
 					const id = `${m.provider}/${m.id}`;
 					const mark = id === current ? "  ◀ on this now" : id === `${ctx.model?.provider}/${ctx.model?.id}` ? "  ← this session" : "";
 					return `${truncateToWidth(m.id, 30, "…").padEnd(30)}  ${endpointLabel(`${m.provider}/x`).padEnd(16)} ${fmt(m.contextWindow ?? 0).padStart(5)} ctx${mark}`;
-				});
+				}));
 				const choice = await ctx.ui.select(`Move "${truncateToWidth(name(target), 40, "…")}" to`, labels);
 				model = choice ? models[labels.indexOf(choice)] : undefined;
 			}
@@ -639,7 +660,7 @@ export default function (pi: ExtensionAPI): void {
 				: undefined;
 			const target = named ?? (list.length === 1 ? list[0] : undefined);
 			if (target) return attach(ctx, target);
-			const labels = list.map((a) => `${oneLine(a.description || a.type, 40).padEnd(42)} ${a.endedAt ? "finished" : "running"}`);
+			const labels = uniqueLabels(list.map((a) => `${oneLine(a.description || a.type, 40).padEnd(42)} ${a.endedAt ? "finished" : "running"}`));
 			const choice = await ctx.ui.select("Attach to which agent?", labels);
 			if (choice) attach(ctx, list[labels.indexOf(choice)]);
 		},
