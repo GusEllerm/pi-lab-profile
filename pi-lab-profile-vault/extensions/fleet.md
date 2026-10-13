@@ -1,6 +1,6 @@
 ---
 source: extensions/fleet.ts
-source-hash: 37ea95707f9212b20a5aa1d6654c813ecb466276
+source-hash: b10102b415e833abfcf574fa34e0d0fe3744e9ae
 documented: 2026-09-20
 ---
 
@@ -48,8 +48,6 @@ agent's children from every top-level surface, so there is no nested tree.
 | `subagents:completed` | consumed | `{ id, status?, durationMs?, tokens? }` | Marks it ended; it lingers in the roster for `FINISHED_LINGER_MS`. |
 | `subagents:failed` | consumed | same shape | Same, rendered with the error glyph. |
 | `statusbar:endpoint-labels` | consumed | `Record<provider, label>` | Populates `endpointLabels`, so a model id renders as `↗ ALCF Minerva` rather than a bare provider string. Emitted by `endpoints.ts`. |
-| `fleet:keys-hold` | consumed | `{}` | Increments `keysHeld`; the key layer goes quiet. |
-| `fleet:keys-release` | consumed | `{}` | Decrements it. |
 | `statusbar:slot` | emitted | `{ id: "agents", order: 3, tokens, text, state, statusKey: "subagents", details() }` | The roster's presence in the footer/sidebar/dashboard. `statusKey` suppresses `pi-subagents`' raw `setStatus()` line under the dashboard's OTHER section. |
 | `statusbar:transcript` | emitted | `{ component }` on attach, `{}` on detach | Hands `statusbar.ts` the `ScrollView` that replaces the main transcript pane. `statusbar.ts` owns the layout; fleet only supplies the component. |
 | `statusbar:attached` | emitted | `{ name, stats: () => AttachedStats }` on attach, `{}` on detach | Switches the status column from the session's own numbers to the attached agent's. `stats` is a thunk, re-invoked per render. |
@@ -205,6 +203,13 @@ emitting a `statusbar:slot` every half second until shutdown.
 and `stats`, so [[outputs]] can list the attached agent's artefacts. It is the same accessor the
 pane renders from; the column ignores the extra field.
 
+### 13 Oct 2026 review
+
+- `fleet:keys-hold` / `fleet:keys-release` are gone: their only emitter (endpoints) was removed on 23 Sept and the listener outlived it by three weeks. `promptDepth` (Pi's own `ui_prompt_*`) still keeps ↓ away from the list during a dialog.
+- `liveCache` held every finished agent's `AgentSession` -- its whole branch -- until exit; `publishSlot()` now drops entries the roster has forgotten. An agent still attached past the linger window is re-read from pi-subagents' record on demand.
+- The three pickers (`/attach`, both `/agent-model` steps) resolve the chosen row by `labels.indexOf(choice)`; `uniqueLabels()` numbers repeated rows first, so two agents with the same description no longer both map to the first.
+- The slot's `order` field, which nothing read, is gone. The `dead` flag and `emit` are `lib/lifecycle.ts`; the label map is `lib/bus.ts`'s `endpointLabels(pi)`; `subagents.json` is read through `lib/paths.ts`'s `agentDir()`, which honours `PI_CODING_AGENT_DIR` (this file did not).
+
 ## Invariants a future change must not break
 
 - **The 500 ms ticker must never outlive the activation.** `/reload` (and any shutdown) replaces the
@@ -224,10 +229,7 @@ pane renders from; the column ignores the extra field.
   `ui_prompt_start` / `ui_prompt_end` and is `> 0` whenever Pi is showing a blocking dialog
   (select/confirm/input/editor/custom). Without that gate, escape closing the `/status` dashboard also
   detached from the attached agent (two escapes to leave one popup), and arrow keys moved the roster
-  underneath an open picker. `keysHeld` covers the window *before* a dialog exists: Pi has no
-  command-start event, so a slow command announces itself — `endpoints.ts` emits `fleet:keys-hold`
-  around its ~10 s four-cluster probe and `fleet:keys-release` in a `finally`. Both counters clamp at
-  zero on release.
+  underneath an open picker. `keysHeld` covered the window *before* a dialog existed (a slow command announced itself over `fleet:keys-hold`); it went on 13 Oct 2026, three weeks after its last emitter did.
 - **`tokensById` is append-only within a session.** Do not rebuild the aggregate from `roster()`.
 - **`live()`'s cache must stay in front of every session walk.** Calling `readLive()` or
   `readSession()` per row per frame is what exhausted the heap before the cache existed.
@@ -260,8 +262,7 @@ pane renders from; the column ignores the extra field.
 
 - [[statusbar]] — owns the footer, sidebar, `/status` dashboard and the transcript layout; consumes
   `statusbar:slot`, `statusbar:transcript` and `statusbar:attached`.
-- [[endpoints]] — emits `statusbar:endpoint-labels` and the `fleet:keys-hold` / `fleet:keys-release`
-  pair; supplies the human labels behind the `↗` mark.
+- [[endpoints]] — emits `statusbar:endpoint-labels`.
 - [[rounds]] — another publisher on the `statusbar:slot` protocol.
 - [[../architecture/pi-internals]] — the Pi-internal surfaces this profile relies on
   (`Symbol.for("pi-subagents:manager")`, `setLayoutRoot`, widget placement, `onTerminalInput`).

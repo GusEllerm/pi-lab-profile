@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 23411bf47249cd56f454bd984969def6cea4a5f2
+source-hash: 3f7c03f7f98bb4bbffaf358078223c53f25536f2
 documented: 2026-09-20
 ---
 
@@ -319,6 +319,10 @@ resize then ran a forced full repaint per reload ever done. `scheduleResizeSettl
   (the ScrollView holds `child`); a `return` inside the wrapper's `finally` that would have
   swallowed the render result. `band` is in the memo key. The header comment matches the code again
   (≥ 72 columns; the pin bar in the layout; the pin bar is clickable).
+
+### 13 Oct 2026 review: shared protocol and guard
+
+`Slot`, `AttachedStats` and `SlotState` now live in `extensions/lib/bus.ts` with every other event's payload type (statusbar re-exports them); nothing had imported them from here, and hpc-bridge had grown its own `SlotState` without `"plain"`. The `dead` flag and `alive(ctx)` are `lib/lifecycle.ts` (`const life = lifecycle(pi)`; `alive` still means "has a UI"), and the endpoint-label map comes from `bus.endpointLabels(pi, onChange)` -- the same handler had three copies. The memo key no longer calls `getContextUsage()` per frame (it re-projects the whole session each call -- the Intl.Segmenter mistake again); `contextUsage` is read on session start, turn/agent end, model select and `session_compact`, and the key and footer use that. The column body still reads it live, once per key change.
 
 ## Invariants a future change must not break
 

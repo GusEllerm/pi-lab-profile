@@ -35,6 +35,8 @@ import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-c
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { agentDir } from "./lib/paths.ts";
+import { lifecycle } from "./lib/lifecycle.ts";
+import { endpointLabels as endpointLabelMap } from "./lib/bus.ts";
 
 export type HeaderConfig = {
 	art?: string[];
@@ -218,16 +220,13 @@ export const STARTER: HeaderConfig = {
 };
 
 export default function (pi: ExtensionAPI): void {
-	let dead = false;
+	const life = lifecycle(pi);
 	let ctxRef: ExtensionContext | undefined;
 	let config: HeaderConfig | undefined;
 	let source: string | undefined;
 	let problem: string | undefined;
 	let branch = "";
-	const labels = new Map<string, string>();
-	pi.events.on("statusbar:endpoint-labels", (data) => {
-		for (const [p, l] of Object.entries((data ?? {}) as Record<string, string>)) labels.set(p, l);
-	});
+	const labels = endpointLabelMap(pi);
 
 	const values = (theme: Style): Values => {
 		const m = ctxRef?.model as { id?: string; provider?: string } | undefined;
@@ -307,7 +306,6 @@ export default function (pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", (_event, ctx) => {
-		dead = false;
 		ctxRef = ctx;
 		branch = gitBranch(process.cwd());
 		load(process.cwd());
@@ -320,14 +318,11 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("model_select", (_event, ctx) => {
 		ctxRef = ctx;
 	});
-	pi.on("session_shutdown", () => {
-		dead = true;
-	});
 
 	pi.registerCommand("header", {
 		description: "The startup header: /header (status) · /header reload · /header init (write a starter to edit) · /header off",
 		handler: async (args, ctx) => {
-			if (dead) return;
+			if (life.dead()) return;
 			const verb = args.trim().toLowerCase();
 			if (verb === "reload") {
 				load(process.cwd());

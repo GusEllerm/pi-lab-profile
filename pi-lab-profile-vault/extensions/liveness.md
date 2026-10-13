@@ -1,6 +1,6 @@
 ---
 source: extensions/liveness.ts
-source-hash: b3950efd70ff7b38c1a5d347c6c5f8a252d43a2d
+source-hash: 5cc1bed83ad83e20c8b7208f1d0de6e93db24065
 documented: 2026-10-04
 ---
 
@@ -95,6 +95,10 @@ ceiling, with a one-minute floor so a shared GPU's queue is not an alarm.
   recovers, so a long stall is said once, not every two seconds.
 
 A 2 s ticker runs only while something is active and stops itself when nothing is.
+
+### 13 Oct 2026 review
+
+Every subagent activation loaded the timing cache at spawn and wrote its own copy back five seconds after any event, last writer winning, so the primary's samples since the spawn were lost (never corrupted). `save()` now persists only from the activation with a UI. The cache path comes from `lib/paths.ts`'s `agentDir()`; the `dead` flag and `emit` from `lib/lifecycle.ts`. Still open from the review: the priors are keyed `mcp__hpc__*`, assuming the MCP server is named `hpc`, while hpc-bridge derives the prefix from mcp.json -- handled with the hpc-bridge findings.
 
 ## Invariants a future change must not break
 

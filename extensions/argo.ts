@@ -37,6 +37,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Pager } from "./outputs.ts";
+import { lifecycle } from "./lib/lifecycle.ts";
 
 export type ArgoConfig = { user: string; port: number; file: string };
 
@@ -463,7 +464,7 @@ sys.exit(exited)
 `;
 
 export default async function (pi: ExtensionAPI): Promise<void> {
-	let dead = false;
+	const life = lifecycle(pi);
 	let cfg = readArgoConfig();
 	let up = false;
 	let registered = false;
@@ -477,14 +478,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	/** models already blamed for an empty stream this session, so the hint appears once each */
 	const hinted = new Set<string>();
 
-	const emit = (event: string, payload: unknown) => {
-		if (dead) return;
-		try {
-			pi.events.emit(event, payload);
-		} catch {
-			dead = true;
-		}
-	};
+	const emit = life.emit;
 	const base = () => `http://127.0.0.1:${cfg?.port ?? 44497}`;
 
 	async function health(timeoutMs = 3000): Promise<boolean> {
@@ -503,7 +497,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		if (!res.ok) throw new Error(`/v1/models: HTTP ${res.status}`);
 		const payload = (await res.json()) as { data?: { id: string }[] };
 		// awaited the network: a /reload or session switch meanwhile leaves a stale `pi` that throws
-		if (dead) throw new Error("session ended while the catalogue loaded");
+		if (life.dead()) throw new Error("session ended while the catalogue loaded");
 		models = order(dedupe((payload.data ?? []).map((m) => m.id))).filter((id) => !unavailable.has(id));
 		const p = providers(models, cfg, pricing);
 		pi.registerProvider("argo", p.argo as never);
@@ -554,7 +548,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			}),
 		);
 		ctx.ui.setStatus("argo-check", undefined);
-		if (dead) return;
+		if (life.dead()) return;
 		const bad = [...results].filter(([, why]) => why);
 		for (const [id] of bad) unavailable.add(id);
 		for (const [id] of results) if (!results.get(id)) unavailable.delete(id);
@@ -602,7 +596,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pricing = await (g[PRICING_KEY] ??= loadPricing());
 	const background = () => {
 		(async () => {
-			if (dead || registered || !cfg || !(await health(5000)) || dead || registered) return;
+			if (life.dead() || registered || !cfg || !(await health(5000)) || life.dead() || registered) return;
 			await register();
 		})().catch((e) => {
 			lastError = e instanceof Error ? e.message : String(e);
@@ -624,11 +618,11 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	// reports usage in full (measured with stream_options.include_usage).
 	pi.on("message_end", (event, ctx) => {
 		const m = (event as { message?: { role?: string; provider?: string; model?: string; stopReason?: string; errorMessage?: string; timestamp?: number; usage?: Usage } }).message;
-		if (dead || !m || m.role !== "assistant" || (m.provider !== "argo" && m.provider !== "argo-openai")) return undefined;
+		if (life.dead() || !m || m.role !== "assistant" || (m.provider !== "argo" && m.provider !== "argo-openai")) return undefined;
 		if (m.stopReason === "error" && isEmptyStream(m.errorMessage) && m.model && !hinted.has(m.model)) {
 			// Pi retries this three times and says the same thing each time; say once what it means
 			hinted.add(m.model);
-			if (ctx.hasUI) ctx.ui.notify(`argo: ${m.model} returned an empty stream — Argo lists it but it does not answer (retired?). Pick another with /model; /argo check probes every Claude model and drops the dead ones`, "warning");
+			if (ctx.hasUI) ctx.ui.notify(`argo: ${m.model} returned an empty stream — Argo lists it but it does not answer (retired?). Pick another with /model; /argo check probes every Claude model and drops the life.dead() ones`, "warning");
 			return undefined;
 		}
 		if (m.provider !== "argo" || !m.usage) return undefined;
@@ -664,7 +658,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	// A light poll only while we claim to be up: argo-down closes the port on purpose, and the
 	// column should say so before the next request fails with connection refused.
 	poll = setInterval(() => {
-		if (dead || !registered) return;
+		if (life.dead() || !registered) return;
 		void health().then((ok) => setUp(ok));
 	}, 30_000);
 	// an observer: it must never keep a process alive (a headless run, a test file) on its own
@@ -692,7 +686,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			// the Duo dialog, dismissed if argo-up goes away while it is open
 			const dialog = new AbortController();
 			const say = (text: string, kind: "info" | "warning" | "error") => {
-				if (dead) return;
+				if (life.dead()) return;
 				try {
 					ctx.ui.notify(text, kind);
 				} catch {
@@ -717,12 +711,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				}
 				buffer = lines[lines.length - 1];
 				const prompt = looksLikePrompt(buffer);
-				if (prompt && !asking && !dead) {
+				if (prompt && !asking && !life.dead()) {
 					asking = true;
 					void ctx.ui
 						.input(prompt, /option/i.test(prompt) ? "1 for a Duo push" : "", { signal: dialog.signal })
 						.then((answer) => {
-							if (dead || dialog.signal.aborted || proc.exitCode !== null) return;
+							if (life.dead() || dialog.signal.aborted || proc.exitCode !== null) return;
 							if (answer === undefined) {
 								say("argo: cancelled", "warning");
 								proc.kill("SIGTERM");
@@ -752,7 +746,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 				// /reload can make this activation stale. So `dead` is checked after the await too, and
 				// the whole continuation is caught.
 				(async () => {
-					if (dead) return;
+					if (life.dead()) return;
 					if (code !== 0) return say(`argo: argo-up exited ${code} — see the lines above; argo-netcheck diagnoses the bastion`, "error");
 					try {
 						const n = await register();
@@ -777,13 +771,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			proc.stdout?.on("data", (d) => (out += d));
 			proc.stderr?.on("data", (d) => (out += d));
 			proc.on("error", (e) => {
-				if (!dead) ctx.ui.notify(`argo: could not run argo-down: ${e.message}`, "error");
+				if (!life.dead()) ctx.ui.notify(`argo: could not run argo-down: ${e.message}`, "error");
 				resolve();
 			});
 			proc.on("close", (code) => {
 				unregister();
 				setUp(false);
-				if (!dead) {
+				if (!life.dead()) {
 					const lines = out.split("\n").map((l) => l.trim().replace(/^\[argo-down\]\s*/, "")).filter(Boolean);
 					ctx.ui.notify(`argo: down${code ? ` (argo-down exited ${code})` : ""} — models unregistered\n${lines.slice(-4).join("\n")}`, code ? "warning" : "info");
 				}
@@ -833,7 +827,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 			r = await run(["--totals"]);
 		}
 		ctx.ui.setStatus("argo-spend", undefined);
-		if (dead) return;
+		if (life.dead()) return;
 		const clean = r.out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\r/g, "");
 		if (r.code !== 0) return ctx.ui.notify(`argo: argo-dash failed (${r.code ?? "no start"}) — ${clean.trim().split("\n").slice(-2).join(" / ")}`, "error");
 		const lines = [spendLine(ctx), "", ...clean.trimEnd().split("\n")];
@@ -843,7 +837,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	pi.registerCommand("argo", {
 		description: "Argo gateway: /argo · /argo up (runs argo-up, Duo prompt in chat) · /argo down · /argo spend · /argo check (which listed models answer) · /argo reload",
 		handler: async (args, ctx) => {
-			if (dead) return;
+			if (life.dead()) return;
 			const verb = args.trim().toLowerCase();
 			if (verb === "on" || verb === "up") return runUp(ctx);
 			if (verb === "down" || verb === "off") return runDown(ctx);
@@ -872,12 +866,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 	});
 
 	pi.on("session_start", () => {
-		dead = false;
 		cfg ??= readArgoConfig();
 		emit("argo:health", { up, port: cfg?.port, models: models.length });
 	});
 	pi.on("session_shutdown", () => {
-		dead = true;
 		if (poll) clearInterval(poll);
 		poll = undefined;
 		child?.kill("SIGTERM");

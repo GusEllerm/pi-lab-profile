@@ -16,7 +16,8 @@ extensions/
   paste-guard   unbracketed pastes
   code-panels   code blocks without fences
   image-window  /images
-  lib/          what more than one extension needs: paths (the agent dir, reading JSON)
+  lib/          what more than one extension needs: bus (the event names and payload types),
+                lifecycle (the shutdown guard), paths (the agent dir, reading JSON)
 agents/         dev · reviewer · critic — roles with no model pins
 profiles/lab/   the Globus Labs config: models.json, mcp.json, rounds.json, subagents.json,
                 header.json, pi-cc-extensions.json, bin/ (globus-tunnel, alcf-token)
@@ -28,8 +29,16 @@ pi-lab-profile-vault/  the project's memory (below)
 ```
 
 Extensions talk to each other through Pi's event bus — the column is a set of slots the others
-publish into — so most can be removed without touching the rest. The one direct import: `argo`
-borrows `outputs`' pager for `/argo spend`.
+publish into — so most can be removed without touching the rest. The event names and what rides
+on each are `extensions/lib/bus.ts`; an emit or a listener that disagrees with it is a type
+error. The one direct import between extensions: `argo` borrows `outputs`' pager for `/argo spend`.
+
+Anything that can still run after `session_shutdown` — a timer, a promise continuation, an event
+handler — must not touch the captured `pi` or `ctx` without a guard: after `/reload` every ctx
+getter and `pi.events.emit` throw, and from a timer that is an uncaughtException that takes Pi
+down. `extensions/lib/lifecycle.ts` is the guard: `const life = lifecycle(pi)` at the top of the
+factory, then `life.dead()`, `life.emit()`, `life.alive(ctx)`, `life.onShutdown()`. A test fails
+if an extension grows its own copy.
 
 ## What it depends on
 

@@ -1,6 +1,6 @@
 ---
 source: extensions/rounds.ts
-source-hash: b8bf07c3b92b2c8428502a172039613f50bb8337
+source-hash: 01c8da1dfd7d9ba99766585d6ac95649963bf79d
 documented: 2026-09-20
 ---
 
@@ -198,6 +198,12 @@ the final notify shows instead of quietly omitting the path. `/rounds` selects b
 rounds with one task and verdict share a label. `AgentOutcome.durationMs/tokens` are read now.
 Still open: the early-failure window between the spawn reply and the completion subscription
 (unverified in practice).
+
+### 13 Oct 2026 review
+
+- `readConfig` resolved `~/.pi/agent/rounds.json` by hand and ignored `PI_CODING_AGENT_DIR`, so the documented newcomer test (`PI_CODING_AGENT_DIR=/tmp/pi-clean`) ran rounds against the author's lab clusters. It reads through `lib/paths.ts` now; a test fails if any extension does this again.
+- The hand-back's `clip()` could cut inside a fenced block, leaving it open so the critique heading, verdict and report path rendered as code; an odd fence count in the kept part gets its closing fence.
+- The `dead` flag and `emit` are `lib/lifecycle.ts`; the shutdown handler still settles every pending phase.
 
 ## Invariants a future change must not break
 

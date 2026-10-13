@@ -1,6 +1,6 @@
 ---
 source: extensions/argo.ts
-source-hash: a9f03d886e7521b3cd2439a05bb8ec2385ed1a53
+source-hash: cb32f632df11c053dc2423b185bb6746acadf82a
 documented: 2026-09-23
 ---
 
@@ -95,6 +95,12 @@ prompt relayed, de-duplicated real models, a privacy badge.
   undo it. `/argo up` is the user acting.
 - **ssh reads Duo from the controlling terminal**, not stdin, and Pi owns the terminal. Hence the pty.
 - **Metered and logged upstream**, hence the badge and no `/round` default.
+
+### 13 Oct 2026 review
+
+- **Compaction loop.** The usage repair summed `getBranch()`, which Pi documents as *every* entry on the path, compacted-away messages included. After the first auto-compaction the repaired input read as the full history; Pi's threshold check takes a message's usage at face value (`agent-session.js:2474`, its stale-after-compaction guard is only on the estimate path), so every later Argo turn compacted again -- a metered call each. The estimate now runs over `buildSessionProjection().messages`, which is what the request carried. Test: a 50-message branch with a one-message projection.
+- **Relay exit code.** On Linux the hangup after the last slave close can discard output still buffered in the master, marker line included; the relay then reported 1 for a command that exited 0 (CI, under the 15 s bound). On an empty read the wrapper's `waitpid` status is the answer now.
+- The `dead` flag and `emit` are `lib/lifecycle.ts`.
 
 ## Invariants a future change must not break
 

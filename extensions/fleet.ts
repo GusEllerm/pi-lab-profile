@@ -28,6 +28,8 @@ import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { agentDir, readJson } from "./lib/paths.ts";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, isKeyRelease, Markdown, matchesKey, ScrollView, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { lifecycle } from "./lib/lifecycle.ts";
+import { endpointLabels as endpointLabelMap } from "./lib/bus.ts";
 
 const WIDGET_KEY = "fleet";
 const TICK_MS = 500; // elapsed times and token counts move while the main session is idle
@@ -360,10 +362,10 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function ensureTicker(): void {
-		const active = !dead && roster().length > 0;
+		const active = !life.dead() && roster().length > 0;
 		if (active && !ticker) {
 			ticker = setInterval(() => {
-				if (dead) {
+				if (life.dead()) {
 					clearInterval(ticker);
 					ticker = undefined;
 					return;
@@ -458,10 +460,7 @@ export default function (pi: ExtensionAPI): void {
 		rerender();
 	});
 
-	const endpointLabels = new Map<string, string>();
-	pi.events.on("statusbar:endpoint-labels", (data) => {
-		for (const [provider, label] of Object.entries((data ?? {}) as Record<string, string>)) endpointLabels.set(provider, label);
-	});
+	const endpointLabels = endpointLabelMap(pi);
 	const endpointLabel = (modelId: string): string => {
 		const provider = modelId.split("/")[0];
 		return endpointLabels.get(provider) ?? provider;
@@ -487,7 +486,6 @@ export default function (pi: ExtensionAPI): void {
 		for (const t of tokensById.values()) agentTokens += t;
 		emit("statusbar:slot", {
 			id: "agents",
-			order: 3,
 			tokens: agentTokens,
 			text: running || queued ? `agents ${running}${queued ? ` +${queued} queued` : ""}` : "agents –",
 			state: running || queued ? "busy" : "idle",
@@ -518,16 +516,9 @@ export default function (pi: ExtensionAPI): void {
 	 * timer, where the throw is an uncaughtException that kills pi. The 500ms ticker below did
 	 * exactly that. So: stop the clock on shutdown, and treat every emit as dead-checked.
 	 */
-	let dead = false;
+	const life = lifecycle(pi);
 
-	function emit(event: string, payload: unknown): void {
-		if (dead) return;
-		try {
-			pi.events.emit(event, payload);
-		} catch {
-			dead = true; // the activation went away between the check and the call
-		}
-	}
+	const emit = life.emit;
 
 	/** >0 while Pi is showing a blocking dialog (select/confirm/input/editor/custom). */
 	let promptDepth = 0;
@@ -538,24 +529,6 @@ export default function (pi: ExtensionAPI): void {
 		promptDepth = Math.max(0, promptDepth - 1);
 	});
 
-	/**
-	 * >0 while another extension is doing slow work before it can show its dialog, and wants the
-	 * keyboard reserved for it — `/endpoints` probes four clusters for ~10s before its picker opens.
-	 * Pi has no command-start event, so a command that keeps the user waiting says so itself:
-	 *
-	 *     pi.events.emit("fleet:keys-hold", {});   // …await the slow part…
-	 *     pi.events.emit("fleet:keys-release", {});
-	 *
-	 * Without this, a ↓ pressed while waiting silently focuses the agent list instead, and the
-	 * arrows that should have moved the picker have already been eaten by the time it appears.
-	 */
-	let keysHeld = 0;
-	pi.events.on("fleet:keys-hold", () => {
-		keysHeld++;
-	});
-	pi.events.on("fleet:keys-release", () => {
-		keysHeld = Math.max(0, keysHeld - 1);
-	});
 
 	pi.registerCommand("agent-model", {
 		description: "Move a running subagent to another endpoint: /agent-model [agent] [provider/model]",
@@ -694,7 +667,6 @@ export default function (pi: ExtensionAPI): void {
 	// Stop the clock before the activation is replaced. A ticker that outlives it emits into a dead
 	// pi, and a throw from a timer is an uncaughtException — it takes the whole session down.
 	pi.on("session_shutdown", () => {
-		dead = true;
 		if (ticker) {
 			clearInterval(ticker);
 			ticker = undefined;
@@ -703,7 +675,6 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		dead = false;
 		ctxRef = ctx;
 		if (!ctx.hasUI) return;
 		const surfaces = subagentSurfaces(ctx.cwd);
@@ -734,7 +705,7 @@ export default function (pi: ExtensionAPI): void {
 			// A dialog on screen owns the keyboard. Without this, escape closing the /status
 			// dashboard also detached from the attached agent (two escapes to get out of one
 			// popup), and the arrow keys moved this list underneath an open picker.
-			if (promptDepth > 0 || keysHeld > 0) return undefined;
+			if (promptDepth > 0) return undefined;
 			// With the Kitty keyboard protocol (iTerm2 and friends) one press also delivers a release;
 			// acting on both moved the selection twice, which read as "skips the first agent".
 			if (isKeyRelease(data)) return undefined;
@@ -771,11 +742,11 @@ export default function (pi: ExtensionAPI): void {
 						if (!text) return;
 						if (typeof session?.steer !== "function" || (info?.status ?? agent.status) !== "running") return ctx.ui.notify("That agent is no longer running.", "warning");
 						await session.steer(text);
-						if (dead) return; // the activation can go while steer() is in flight
+						if (life.dead()) return; // the activation can go while steer() is in flight
 						ctx.ui.notify("Steering message delivered.", "info");
 					})
 					.catch((error) => {
-						if (dead) return;
+						if (life.dead()) return;
 						try {
 							ctx.ui.notify(`Could not steer: ${error instanceof Error ? error.message : String(error)}`, "error");
 						} catch {

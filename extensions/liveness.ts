@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { agentDir } from "./lib/paths.ts";
+import { lifecycle } from "./lib/lifecycle.ts";
 
 // ── timings: what each wait usually takes ────────────────────────────────────────────────────
 export type Quantiles = { p95: number; p99: number };
@@ -323,7 +324,7 @@ export function observe(model: LivenessModel, event: { type?: string; [k: string
 export const TICK_MS = 2000;
 
 export default function (pi: ExtensionAPI): void {
-	let dead = false;
+	const life = lifecycle(pi);
 	const file = join(agentDir(), "cache", "liveness.json");
 	let saved: Record<string, number[]> | undefined;
 	try {
@@ -362,14 +363,7 @@ export default function (pi: ExtensionAPI): void {
 	let ctxRef: ExtensionContext | undefined;
 	let ticker: ReturnType<typeof setInterval> | undefined;
 
-	const emit = (event: string, payload: unknown) => {
-		if (dead) return;
-		try {
-			pi.events.emit(event, payload);
-		} catch {
-			dead = true;
-		}
-	};
+	const emit = life.emit;
 
 	const publish = () => {
 		const now = Date.now();
@@ -406,9 +400,9 @@ export default function (pi: ExtensionAPI): void {
 		else if (v.level === "ok" || v.level === "waiting") episodes.delete(id);
 	};
 	const ensureTicker = () => {
-		if (ticker || dead) return;
+		if (ticker || life.dead()) return;
 		ticker = setInterval(() => {
-			if (dead) return;
+			if (life.dead()) return;
 			const active = primary.phase !== "idle" || agents.size > 0;
 			for (const id of agents.keys()) subscribe(id);
 			if (!active) {
@@ -424,7 +418,7 @@ export default function (pi: ExtensionAPI): void {
 	// the primary session, through Pi's own events
 	for (const type of ["message_start", "message_update", "message_end", "tool_execution_start", "tool_execution_update", "tool_execution_end", "ui_prompt_start", "ui_prompt_end", "agent_end", "agent_settled"] as const) {
 		pi.on(type as never, ((event: { type?: string }) => {
-			if (dead) return undefined;
+			if (life.dead()) return undefined;
 			if (observe(primary, event, Date.now())) {
 				if (event.type?.startsWith("tool_execution_end") || event.type === "message_update") save();
 				ensureTicker();
@@ -457,7 +451,7 @@ export default function (pi: ExtensionAPI): void {
 			const session = registry()?.getRecord?.(id)?.session;
 			const model = entry.model;
 			const off = session?.subscribe?.((e) => {
-				if (!dead && e && typeof e === "object") observe(model, e as { type?: string }, Date.now());
+				if (!life.dead() && e && typeof e === "object") observe(model, e as { type?: string }, Date.now());
 			});
 			if (off) entry.off = off;
 		} catch {
@@ -476,14 +470,14 @@ export default function (pi: ExtensionAPI): void {
 	};
 	pi.events.on("subagents:created", (data) => {
 		const d = data as { id?: string; type?: string; description?: string } | undefined;
-		if (!d?.id || dead) return;
+		if (!d?.id || life.dead()) return;
 		const entry = entryFor(d.id, d.description || d.type || d.id);
 		if (!entry.started) entry.model.queued(Date.now());
 		ensureTicker();
 	});
 	pi.events.on("subagents:started", (data) => {
 		const d = data as { id?: string; type?: string; description?: string } | undefined;
-		if (d?.id && !dead) watch(d.id, d.description || d.type || d.id);
+		if (d?.id && !life.dead()) watch(d.id, d.description || d.type || d.id);
 	});
 	const finish = (data: unknown) => {
 		const d = data as { id?: string } | undefined;
@@ -499,14 +493,12 @@ export default function (pi: ExtensionAPI): void {
 	pi.events.on("subagents:failed", finish);
 
 	pi.on("session_start", (_event, ctx) => {
-		dead = false;
 		ctxRef = ctx;
 		primary.settled(Date.now());
 		publish();
 	});
 	pi.events.on("statusbar:ready", () => publish());
 	pi.on("session_shutdown", () => {
-		dead = true;
 		if (ticker) clearInterval(ticker);
 		ticker = undefined;
 		if (saveTimer) clearTimeout(saveTimer);
@@ -517,7 +509,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.registerCommand("stuck", {
 		description: "Is anything stuck? Every agent's phase, how long since progress, and what that wait usually takes",
 		handler: async (_args, ctx) => {
-			if (dead) return;
+			if (life.dead()) return;
 			const now = Date.now();
 			const v = primary.verdict(now);
 			const lines = [`this session: ${v.level} · ${v.summary}`, ...v.evidence.map((e) => `  ${e}`)];

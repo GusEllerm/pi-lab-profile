@@ -1,6 +1,6 @@
 ---
 source: extensions/header.ts
-source-hash: 9531e0e2f9d4088192b2b8dff070b22cf79203b8
+source-hash: 51475e51fd43996758612a8d20a63d47987d8afe
 documented: 2026-10-12
 ---
 
@@ -56,6 +56,10 @@ offers only `showStartupHeader` on/off. Pi's extension API replaces the header w
 - **Render is cached** by width, model and endpoint label: the header draws every frame, and the
   rows change only with those.
 - **No subprocess, no network**: the branch comes from `.git/HEAD`, the rest from memory.
+
+### 13 Oct 2026 review
+
+`agentDir()` and the endpoint-label map are the shared ones (`lib/paths.ts`, `lib/bus.ts`); the `dead` flag is `lib/lifecycle.ts`. The example profile now ships a `header.json` (the `STARTER` design, a test keeps them equal), so a non-lab install opens with Pi's mark, the model and the endpoint instead of the built-in header.
 
 ## Invariants
 

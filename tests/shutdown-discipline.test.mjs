@@ -28,7 +28,7 @@ test("rounds: a reload settles every phase still waiting, instead of leaving a 2
 	assert.equal((src.match(/pending\.add\(abort\)/g) ?? []).length, 2, "both waits in runPhase register with `pending`");
 	assert.doesNotMatch(src, /void round\(/, "a round must be launched through launch(), which is its only catch");
 	assert.equal((src.match(/launch\(ctx, round\(/g) ?? []).length, 2, "both command sites go through launch()");
-	assert.match(src, /async function runPhase[\s\S]*?\{\n\t\tif \(dead\) return RELOADED;/, "runPhase refuses on a dead activation");
+	assert.match(src, /async function runPhase[\s\S]*?\{\n\t\tif \(life\.dead\(\)\) return RELOADED;/, "runPhase refuses on a dead activation");
 });
 
 test("rounds: the reply listener is subscribed before its timer is armed", () => {
@@ -50,14 +50,14 @@ test("statusbar: the resize listener is removed on shutdown and its timer refuse
 	assert.match(src, /process\.stdout\.on\("resize", scheduleResizeSettle\)/, "expected the resize hook");
 	assert.match(src, /process\.stdout\.off\("resize", scheduleResizeSettle\)/, "every on() needs its off()");
 	const settle = between(src, "function scheduleResizeSettle(): void {", "}, 120);");
-	assert.equal((settle.match(/if \(dead\) return;/g) ?? []).length, 2, "dead-checked on entry and inside the timer");
-	assert.match(src, /function mountSidebar\(tui: TUI\): void \{\n\t\tif \(dead\) return;/, "mountSidebar is reached from timers");
+	assert.equal((settle.match(/if \(life\.dead\(\)\) return;/g) ?? []).length, 2, "dead-checked on entry and inside the timer");
+	assert.match(src, /function mountSidebar\(tui: TUI\): void \{\n\t\tif \(life\.dead\(\)\) return;/, "mountSidebar is reached from timers");
 });
 
 test("fleet: the steer continuation has a catch", () => {
 	const steer = between(read("fleet.ts"), "Steer \"", "rerender();");
 	assert.match(steer, /\.catch\(/, "an un-awaited promise with no catch is a process exit");
-	assert.match(steer, /if \(dead\) return;/, "notify after an await must be dead-checked");
+	assert.match(steer, /if \(life\.dead\(\)\) return;/, "notify after an await must be dead-checked");
 });
 
 test("every extension that registers a process listener also removes it", () => {

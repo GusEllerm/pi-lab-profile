@@ -54,6 +54,9 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { lifecycle } from "./lib/lifecycle.ts";
+import { endpointLabels as endpointLabelMap } from "./lib/bus.ts";
+import { type AttachedStats, type Slot, type SlotState } from "./lib/bus.ts";
 
 // The sidebar narrows with the terminal rather than vanishing; it only goes away when even a
 // narrow column would leave the transcript too cramped. Override with PI_SIDEBAR_MIN_COLUMNS /
@@ -63,30 +66,7 @@ const SIDEBAR_FIXED_WIDTH = Number(process.env.PI_SIDEBAR_WIDTH ?? 0); // 0 = pi
 const SIDEBAR_COMPACT_BELOW = 30; // narrower than this, label and value stack instead of sharing a row
 const SPEED_WINDOW_MS = Number(process.env.PI_SPEED_WINDOW_MS ?? 10_000);
 
-export type SlotState = "ok" | "warn" | "error" | "busy" | "idle" | "plain";
-
-/** What the column shows instead of the session's own numbers while attached to a subagent. */
-export interface AttachedStats {
-	status: string;
-	modelId?: string;
-	contextPercent: number | null;
-	tokens: number;
-	output: number;
-	turns: number;
-	rate?: number;
-	elapsedMs: number;
-}
-
-export interface Slot {
-	id: string;
-	text: string;
-	state?: SlotState;
-	/** setStatus() key this slot stands in for; its raw text is not repeated under OTHER. */
-	statusKey?: string;
-	/** Tokens attributable to this slot's work — fleet publishes the subagent total here. */
-	tokens?: number;
-	details?: () => string[];
-}
+export type { AttachedStats, Slot, SlotState } from "./lib/bus.ts";
 
 type Color = Parameters<Theme["fg"]>[0];
 const MARK: Partial<Record<SlotState, [string, Color]>> = {
@@ -509,24 +489,12 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	const LAYOUT_HOOK = Symbol.for("pi-statusbar:layout-hook");
 	type LayoutHook = { onRoot?: (component: Component) => void };
-	let dead = false;
-	const alive = (c: ExtensionContext | undefined): c is ExtensionContext => {
-		if (dead || !c) return false;
-		try {
-			return c.hasUI; // getter throws once this activation has been replaced
-		} catch {
-			dead = true;
-			return false;
-		}
-	};
+	const life = lifecycle(pi);
+	const alive = life.alive;
 
 	// endpoints.ts publishes the short names it uses ("globus3", "ALCF Minerva"); fall back to the
 	// provider's display name so a provider it does not know about still reads sensibly.
-	const endpointLabels = new Map<string, string>();
-	pi.events.on("statusbar:endpoint-labels", (data) => {
-		for (const [provider, label] of Object.entries((data ?? {}) as Record<string, string>)) endpointLabels.set(provider, label);
-		rerender("statusbar:endpoint-labels");
-	});
+	const endpointLabels = endpointLabelMap(pi, () => rerender("statusbar:endpoint-labels"));
 	const providerLabel = (provider: string): string =>
 		endpointLabels.get(provider) ?? (ctxRef?.modelRegistry.getProviderDisplayName(provider) ?? provider).split(" · ")[0];
 
@@ -890,11 +858,11 @@ export default function (pi: ExtensionAPI): void {
 	 * what leaves artefacts on screen until the next keystroke.
 	 */
 	function scheduleResizeSettle(): void {
-		if (dead) return;
+		if (life.dead()) return;
 		if (resizeTimer) clearTimeout(resizeTimer);
 		resizeTimer = setTimeout(() => {
 			resizeTimer = undefined;
-			if (dead) return; // the 120ms window can straddle a reload
+			if (life.dead()) return; // the 120ms window can straddle a reload
 			prof.settles++;
 			const tui = tuiRef;
 			if (!tui) return;
@@ -1220,7 +1188,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function mountSidebar(tui: TUI): void {
-		if (dead) return; // reached from setTimeout(0) sites: a timer straddling a reload would re-mount the dead column and take hook.onRoot from the live one
+		if (life.dead()) return; // reached from setTimeout(0) sites: a timer straddling a reload would re-mount the dead column and take hook.onRoot from the live one
 		if (!isViewportTUI(tui)) return;
 		// only an activation with a real TUI gets here: take the process-wide hooks for this one
 		sink.prof = prof;
@@ -1246,7 +1214,7 @@ export default function (pi: ExtensionAPI): void {
 			};
 		}
 		hook.onRoot = (component) => {
-			if (dead) return;
+			if (life.dead()) return;
 			instrumentTranscript(component);
 			if (component !== mountedRoot) setTimeout(() => mountSidebar(tui), 0);
 		};
@@ -1439,7 +1407,6 @@ export default function (pi: ExtensionAPI): void {
 	// next activation finds a root it does not recognise (VStack[HStack, dock]) and declines to
 	// mount, leaving a dead sidebar on screen that crashes the next layout pass.
 	pi.on("session_shutdown", () => {
-		dead = true;
 		gcObserver?.disconnect(); // a live observer would outlive this activation and leak per reload
 		gcObserver = undefined;
 		// Added per activation, so it must go per activation: left in place, every reload stacked
@@ -1489,7 +1456,6 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", (_event, ctx) => {
-		dead = false;
 		ctxRef = ctx;
 		if (!pinnedPrompt) backfillPrompt(ctx);
 		if (!resizeHooked && ctx.hasUI) {

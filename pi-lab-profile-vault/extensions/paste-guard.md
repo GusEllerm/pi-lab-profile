@@ -1,6 +1,6 @@
 ---
 source: extensions/paste-guard.ts
-source-hash: 8c448fae69da1c71774c233a6f0c3c29aba88032
+source-hash: 429fb98a04f6d7cd2cc36303db853ebb9ae11aef
 documented: 2026-09-23
 ---
 

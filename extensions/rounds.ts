@@ -23,6 +23,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { agentDir, readJson } from "./lib/paths.ts";
+import { lifecycle } from "./lib/lifecycle.ts";
 
 type SpawnReply = { id?: string; error?: string };
 type AgentOutcome = { status?: string; result?: string; error?: string; durationMs?: number; tokens?: { total?: number } };
@@ -127,7 +128,7 @@ export default function (pi: ExtensionAPI): void {
 	 * an async continuation that is an uncaughtException, which kills the session. So every emit is
 	 * dead-checked, and a reload quietly orphans the round rather than taking pi with it.
 	 */
-	let dead = false;
+	const life = lifecycle(pi);
 	/**
 	 * Every phase currently waiting on pi-subagents, as a function that settles it. A `/reload` takes
 	 * the completion listeners with it -- the host unsubscribes the old activation's `pi.events.on`
@@ -136,20 +137,12 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	const pending = new Set<() => void>();
 	pi.on("session_shutdown", () => {
-		dead = true;
 		for (const settle of pending) settle();
 		pending.clear();
 	});
 	const RELOADED: AgentOutcome = { status: "error", error: "session reloaded before this phase finished" };
 
-	function emit(event: string, payload: unknown): void {
-		if (dead) return;
-		try {
-			pi.events.emit(event, payload);
-		} catch {
-			dead = true;
-		}
-	}
+	const emit = life.emit;
 
 	let running: { task: string; phase: string; since: number } | undefined;
 	let lastSummary: string | undefined;
@@ -166,10 +159,10 @@ export default function (pi: ExtensionAPI): void {
 
 	/** Spawn one role through pi-subagents' RPC and wait for its result. */
 	async function runPhase(role: string, description: string, prompt: string, model?: string, timeoutMs = DEFAULT_TIMEOUT_MINUTES * 60_000): Promise<AgentOutcome> {
-		if (dead) return RELOADED;
+		if (life.dead()) return RELOADED;
 		const spawn = (withModel?: string) =>
 			new Promise<SpawnReply>((resolve) => {
-				if (dead) return resolve({ error: RELOADED.error });
+				if (life.dead()) return resolve({ error: RELOADED.error });
 				const requestId = `rounds-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 				let done = false;
 				let timer: ReturnType<typeof setTimeout> | undefined;
@@ -211,7 +204,7 @@ export default function (pi: ExtensionAPI): void {
 		if (cancelled) stopAgent(id); // /round stop landed while this one was still starting up
 
 		const outcome = await new Promise<AgentOutcome>((resolve) => {
-			if (dead) return resolve(RELOADED);
+			if (life.dead()) return resolve(RELOADED);
 			let done = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			let unsubscribe = () => {};
@@ -350,7 +343,7 @@ export default function (pi: ExtensionAPI): void {
 		const panel = configured.slice(0, Math.max(1, Math.min(configured.length, seats)));
 		const timeoutMs = Math.max(1, cfg.timeoutMinutes ?? DEFAULTS.timeoutMinutes) * 60_000;
 		const announce = (phase: string) => {
-			if (dead) return; // ctx throws now; the slot emit below is dead-checked on its own
+			if (life.dead()) return; // ctx throws now; the slot emit below is dead-checked on its own
 			if (running) running.phase = phase;
 			if (ctx.hasUI) ctx.ui.setStatus("rounds", undefined); // the sidebar slot is the one place this shows
 			publish(`round ${phase}`, "busy", () => [phase, task.slice(0, 60), `${Math.round((Date.now() - (running?.since ?? 0)) / 1000)}s · /round stop`]);
@@ -370,7 +363,7 @@ export default function (pi: ExtensionAPI): void {
 						timeoutMs,
 					);
 					phases.push({ role: "dev", title: `Dev${suffix}`, outcome: dev });
-					if (dead) return;
+					if (life.dead()) return;
 					if (failed(dev) || cancelled) break;
 					carry = text(dev);
 				}
@@ -385,13 +378,13 @@ export default function (pi: ExtensionAPI): void {
 				);
 				// One retry per seat. These endpoints drop a turn now and then, and a seat that says
 				// nothing costs the panel a whole viewpoint for a failure that usually does not repeat.
-				if (dead) return;
+				if (life.dead()) return;
 				seated = await Promise.all(
 					seated.map(async (s) =>
-						failed(s.outcome) && !cancelled && !dead ? { ...s, outcome: await runPhase("reviewer", `${seatName(s.n)} retry`, brief, s.seat.model, timeoutMs) } : s,
+						failed(s.outcome) && !cancelled && !life.dead() ? { ...s, outcome: await runPhase("reviewer", `${seatName(s.n)} retry`, brief, s.seat.model, timeoutMs) } : s,
 					),
 				);
-				if (dead) return;
+				if (life.dead()) return;
 				seated.forEach(({ seat, outcome }) =>
 					phases.push({ role: "reviewer", title: `Review${suffix}${panel.length > 1 ? ` — ${seat.label}` : ""}`, outcome }),
 				);
@@ -410,14 +403,14 @@ export default function (pi: ExtensionAPI): void {
 					timeoutMs,
 				);
 				phases.push({ role: "critic", title: `Critique${suffix}`, outcome: critique });
-				if (dead) return;
+				if (life.dead()) return;
 				if (failed(critique) || cancelled) break;
 
 				if (!tally(text(critique)).CONFIRMED) break; // nothing survived: another dev pass has nothing to fix
 				carry = surviving(text(critique)); // the next round works from what survived scrutiny -- not from what was thrown out
 			}
 
-			if (dead) return; // writeReport reads ctx.cwd, which throws on a replaced activation
+			if (life.dead()) return; // writeReport reads ctx.cwd, which throws on a replaced activation
 			const critique = [...phases].reverse().find((p) => p.role === "critic" && !failed(p.outcome));
 			const verdict = cancelled ? `stopped after ${phases.length} phase${phases.length === 1 ? "" : "s"}` : verdictLine(critique ? text(critique.outcome) : undefined);
 			const report = writeReport(ctx, task, phases, verdict);
@@ -458,7 +451,7 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	function launch(ctx: ExtensionContext, work: Promise<void>): void {
 		work.catch((error) => {
-			if (dead) return; // nothing left to tell, and nothing to tell it with
+			if (life.dead()) return; // nothing left to tell, and nothing to tell it with
 			try {
 				ctx.ui.notify(`Round failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 			} catch {
