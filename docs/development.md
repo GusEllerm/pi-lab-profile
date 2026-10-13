@@ -16,6 +16,7 @@ extensions/
   paste-guard   unbracketed pastes
   code-panels   code blocks without fences
   image-window  /images
+  lib/          what more than one extension needs: paths (the agent dir, reading JSON)
 agents/         dev · reviewer · critic — roles with no model pins
 profiles/lab/   the Globus Labs config: models.json, mcp.json, rounds.json, subagents.json,
                 header.json, pi-cc-extensions.json, bin/ (globus-tunnel, alcf-token)
@@ -60,10 +61,16 @@ Edit → `scripts/check.sh` → `/reload` in Pi → live. A broken edit breaks y
 there is no staging copy, so run the check *before* reloading.
 
 ```bash
-npm test                     # ~100 unit tests, plus the canaries when Pi and pi-cc are installed
+npm test                     # ~120 unit tests, plus the canaries when Pi and pi-cc are installed
 bash scripts/check.sh        # parses; lockfile in sync; Pi boots and replies headless; the TUI comes up clean
 bash scripts/check-docs.sh   # which vault notes have drifted from the code they describe
 ```
+
+`check.sh`'s last two steps start the real Pi, so they need what a session needs: a default model
+that answers (the lab profile's tunnel or an ALCF token; your own provider on the example
+profile — [providers.md](providers.md)) and `"tuiMode": "fullscreen"` in `settings.json`. CI runs
+only the first two steps (`--parse-only`). A `BOOT FAIL: No API key found` on a fresh checkout
+is that, not a broken checkout.
 
 `check.sh`'s lockfile step exists because CI's `npm ci` refuses a lockfile out of sync with
 `package.json`, and nothing else run locally would notice. After changing `package.json`:

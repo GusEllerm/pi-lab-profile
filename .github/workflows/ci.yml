@@ -7,7 +7,12 @@ on:
     # Three workarounds here depend on upstream bugs staying exactly as they are. The canaries in
     # tests/upstream-assumptions.test.mjs assert each bug is still present; the weekly job below
     # installs the current Pi and pi-cc and runs them, so an upstream fix shows up as a failing
-    # canary here rather than as a mystery mid-session.
+    # canary here rather than as a mystery mid-session. The same job runs the whole suite against
+    # that Pi, so an API change in a new release is caught before anyone upgrades by hand.
+    #
+    # Two GitHub facts: a scheduled workflow is switched off after 60 days without a push to the
+    # repository (re-enable it under Actions), and a scheduled run's failure email goes only to
+    # whoever last committed this cron line.
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
@@ -66,6 +71,26 @@ jobs:
           node -e "console.log('pi', require(require('child_process').execSync('npm root -g').toString().trim() + '/@earendil-works/pi-coding-agent/package.json').version)"
           node -e "console.log('pi-cc', require(process.env.HOME + '/.pi/agent/npm/node_modules/pi-cc-extensions/package.json').version)"
 
+      - name: The installed Pi must load before anything is read into a canary's verdict
+        # A canary that fails because pi-tui no longer imports is not "upstream fixed the bug"; it
+        # was read that way once. Settle the import on its own first.
+        run: |
+          root=$(npm root -g)/@earendil-works/pi-coding-agent
+          node -e "import('$root/node_modules/@earendil-works/pi-tui/dist/index.js').then(() => console.log('pi-tui imports'))" \
+            || { echo "::error::the current Pi's pi-tui does not import under this Node — a canary failure below would be this, not an upstream fix"; exit 1; }
+          node -e "import('$(echo ~)/.pi/agent/npm/node_modules/pi-cc-extensions/package.json', { with: { type: 'json' } }).then(() => console.log('pi-cc present'))" \
+            || { echo "::error::pi-cc-extensions is not where the canaries look"; exit 1; }
+
+      - name: Unit tests against the current Pi
+        # The push job's npm ci tests against the Pi pinned in the lockfile. Here the peer packages
+        # are swapped for @latest (not saved, so the lockfile stays as it is) and the suite runs
+        # again: a breaking change to the extension API shows up here, weekly, not mid-session.
+        run: |
+          npm ci --omit=dev
+          npm install --no-save --ignore-scripts @earendil-works/pi-coding-agent@latest @earendil-works/pi-tui@latest @earendil-works/pi-ai@latest
+          node -e "console.log('suite runs against pi-coding-agent', require('./node_modules/@earendil-works/pi-coding-agent/package.json').version)"
+          node --test --test-timeout=120000 tests/*.test.ts tests/*.test.mjs
+
       - name: Canaries must run, not skip, and must still find every upstream bug
         run: |
           node --test tests/upstream-assumptions.test.mjs 2>&1 | tee canaries.tap
@@ -74,6 +99,6 @@ jobs:
             exit 1
           fi
           if grep -q "^not ok" canaries.tap; then
-            echo "::error::an upstream bug this profile works around has been fixed — delete the matching workaround (see docs/upstream-hover-width.md)"
+            echo "::error::an upstream bug this profile works around has been fixed (Pi loaded fine, see the step above) — delete the matching workaround (see docs/upstream-hover-width.md)"
             exit 1
           fi

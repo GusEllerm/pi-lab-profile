@@ -4,6 +4,9 @@
   "description": "A Pi profile: right-hand status column, an interactive subagent fleet you can attach to, dev \u2192 review \u2192 critique rounds across separate inference endpoints, Argo and ALCF as providers, and an enforced spend gate for hpc-bridge.",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GusEllerm/pi-lab-profile.git"

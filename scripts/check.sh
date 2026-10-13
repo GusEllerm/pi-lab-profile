@@ -58,10 +58,11 @@ status=$?
 # died on startup -- or was killed by the alarm above -- printed "boot: clean" and was believed.
 # The first line of a failure names its cause ("No API key found for the selected model"); what
 # follows can be a long stack trace from whatever tore down after it, so show the head, not the tail.
+boot_hint="  (this step needs a default model that answers: lab profile → the tunnel or an ALCF token; example → docs/providers.md)"
 if [ "$status" -ne 0 ]; then
-	echo "BOOT FAIL: pi exited $status$([ "$status" -eq 142 ] && echo ' (killed by the 45s alarm)')"; grep -v '^\s*$' "$log" | head -3 | cut -c1-240; fail=1
+	echo "BOOT FAIL: pi exited $status$([ "$status" -eq 142 ] && echo ' (killed by the 45s alarm)')"; grep -v '^\s*$' "$log" | head -3 | cut -c1-240; echo "$boot_hint"; fail=1
 elif ! grep -qi '^ok' "$log"; then
-	echo "BOOT FAIL: no reply from the model"; grep -v '^\s*$' "$log" | head -3 | cut -c1-240; fail=1
+	echo "BOOT FAIL: no reply from the model"; grep -v '^\s*$' "$log" | head -3 | cut -c1-240; echo "$boot_hint"; fail=1
 elif grep -qiE "Failed to load extension|is not defined|is not a function|ParseError|stale after session" "$log"; then
 	echo "BOOT ERRORS:"; grep -iE "Failed to load|is not defined|is not a function|ParseError|stale after session" "$log" | head -5; fail=1
 else
