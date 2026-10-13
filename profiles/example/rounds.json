@@ -1,9 +1,15 @@
 {
-  "_comment": "Copy to ~/.pi/agent/rounds.json and name models you actually have. A seat with no model inherits the session's model. Unresolvable names are dropped, not fatal.",
+  "_comment": "scripts/install.sh example puts this at ~/.pi/agent/rounds.json: name models you actually have, ideally different ones for the two reviewers. A seat with no model (null) uses the session's model; a name that cannot be resolved falls back to it too, so with only one model this file runs as it is.",
   "dev": null,
   "panel": [
-    { "label": "reviewer A", "model": "openai/gpt-5" },
-    { "label": "reviewer B", "model": "anthropic/claude-sonnet-5" }
+    {
+      "label": "reviewer A",
+      "model": "openai/gpt-5"
+    },
+    {
+      "label": "reviewer B",
+      "model": "anthropic/claude-sonnet-5"
+    }
   ],
   "critic": "google/gemini-3-pro",
   "timeoutMinutes": 20

@@ -214,6 +214,7 @@ test("a prompt is an unterminated line asking for something", () => {
 
 test("the pty relay round-trips a prompt: child asks, we answer on stdin, it reads from its tty", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "argo-pty-"));
+	let proc;
 	try {
 		const fake = join(dir, "fake-up.py");
 		writeFileSync(fake, [
@@ -224,17 +225,23 @@ test("the pty relay round-trips a prompt: child asks, we answer on stdin, it rea
 			"sys.stdout.write('[fake] got ' + ans + '\\n'); sys.stdout.flush()",
 			"sys.exit(0 if ans == '1' else 3)",
 		].join("\n"));
-		const proc = spawn("python3", ["-c", PTY_RELAY, "python3", fake], { stdio: ["pipe", "pipe", "pipe"] });
+		proc = spawn("python3", ["-c", PTY_RELAY, "python3", fake], { stdio: ["pipe", "pipe", "pipe"] });
 		let out = "";
 		proc.stdout.on("data", (d) => (out += d.toString()));
 		const until = async (re, ms = 8000) => { const t = Date.now() + ms; while (!re.test(out) && Date.now() < t) await new Promise((r) => setTimeout(r, 30)); assert.match(out, re); };
 		await until(/Passcode or option \(1-3\): $/);
 		assert.equal(looksLikePrompt(out.replace(/\r/g, "")), "Passcode or option (1-3):");
 		proc.stdin.write("1\n");
-		const code = await new Promise((r) => proc.on("close", r));
+		// Bounded: once in CI (13 Oct 2026, 1 run in many; 25/25 clean in a Linux container) the
+		// relay never closed and the file sat out the 120 s test timeout with nothing to show.
+		const code = await new Promise((resolve, reject) => {
+			const t = setTimeout(() => reject(new Error(`relay did not close in 15s; output so far: ${JSON.stringify(out)}`)), 15000);
+			proc.on("close", (c) => (clearTimeout(t), resolve(c)));
+		});
 		assert.match(out, /got 1/);
 		assert.equal(code, 0, "the child's exit code comes back through the relay");
 	} finally {
+		proc?.kill("SIGKILL");
 		rmSync(dir, { recursive: true, force: true });
 	}
 });

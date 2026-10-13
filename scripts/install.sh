@@ -43,6 +43,7 @@ case "$profile" in
 		copy "$here/profiles/example/rounds.json" "$agent_dir/rounds.json"
 		copy "$here/profiles/example/subagents.json" "$agent_dir/subagents.json"
 		copy "$here/profiles/example/pi-cc-extensions.json" "$agent_dir/pi-cc-extensions.json"
+		copy "$here/profiles/example/header.json" "$agent_dir/header.json"
 		echo "  → edit $agent_dir/rounds.json to name models you actually have"
 		;;
 	"") echo "No profile requested; roles only. Pass 'lab' or 'example' for endpoint config." ;;
@@ -52,7 +53,8 @@ esac
 # A bundle install (docs/no-node.md) has already installed the package from a local directory.
 if [ -z "${GLOBUS_HARNESS_BUNDLE:-}" ]; then
 	echo
-	echo "Extensions come from the package itself:  pi install git:github.com/GusEllerm/pi-lab-profile"
+	echo "This script copies configuration only; the extensions are the Pi package itself"
+	echo "(pi install git:github.com/GusEllerm/pi-lab-profile — skip it if you already ran it)."
 fi
 if ls "$agent_dir"/extensions/*.ts >/dev/null 2>&1; then
 	echo "  ! $agent_dir/extensions has .ts files; if they are copies of this harness's, delete them —"

@@ -58,11 +58,13 @@ then:
 ```
 
 - **`"apiKey": "$MY_API_KEY"`** is read from the environment when a request is made, so the key
-  never sits in the file: export `MY_API_KEY` in your shell rc. `"!some-command"` runs a command
+  never sits in the file: export `MY_API_KEY` in your shell rc (near the top — some rc files stop
+  early for non-interactive shells), then open a new terminal. `"!some-command"` runs a command
   for it instead (a password manager, a token helper). A server with no auth still needs some value;
   any string will do.
 - **`contextWindow` and `maxTokens`** should be the model's real limits; the column's context gauge
-  and Pi's automatic compaction trust them.
+  and Pi's automatic compaction trust them. vLLM's `/v1/models` reports the window as
+  `max_model_len`; for anything else, the model card or the server's operator knows.
 - **`reasoning: true`** for a model that thinks; then Pi's thinking levels apply. A vLLM model that
   accepts only certain `reasoning_effort` values needs a `thinkingLevelMap` — the lab's
   `profiles/lab/models.json` has a worked example.

@@ -94,9 +94,9 @@ cd ~/Projects/pi-lab-profile && scripts/install.sh lab      # or: scripts/instal
 ```
 
 The script copies the agent roles and the profile's configuration into `~/.pi/agent/` —
-`models.json`, `mcp.json`, `rounds.json`, `subagents.json`, `header.json`,
-`pi-cc-extensions.json` — and, for `lab`, two helpers into `~/.local/bin/` (`globus-tunnel`,
-`alcf-token`). It never overwrites: a line starting `!` means a file already existed and differs.
+`rounds.json`, `subagents.json`, `header.json` and `pi-cc-extensions.json`; for `lab` also
+`models.json` and `mcp.json`, and two helpers into `~/.local/bin/` (`globus-tunnel`,
+`alcf-token`). The `example` profile has no `models.json`: step 6 writes one. It never overwrites: a line starting `!` means a file already existed and differs.
 For each such line, show the user the difference (`diff <repo file> <existing file>`) and ask
 whether to merge; merge only what they agree to.
 
@@ -133,10 +133,19 @@ Follow [providers.md](providers.md) with the answer from step 0:
   `defaultModel` in `settings.json`.
 - **Their own server:** `curl` its `/v1/models` for the exact model id, write the provider into
   `~/.pi/agent/models.json` with `"apiKey": "$THEIR_VARIABLE"` (merge if the file exists), set
-  `defaultProvider` and `defaultModel`, and ask the user to export the variable.
+  `defaultProvider` and `defaultModel`, and ask the user to export the variable. The model's
+  context window and output limit go in too: vLLM's `/v1/models` reports the window as
+  `max_model_len`; otherwise ask the user rather than guess, and say so if you had to.
 - **Review rounds:** edit `~/.pi/agent/rounds.json` to name models they actually have — ideally
-  two different ones for the panel. With one model, say so: the rounds will still run, with that
-  model reviewing its own work.
+  two different ones for the panel. With one model, leave it as it is (a seat that names a model
+  they do not have falls back to the session's) and tell them the rounds will run with that model
+  reviewing its own work.
+
+A key exported in a shell rc reaches only shells started afterwards — yours included. Ask the
+user to open a new terminal for the check, or run it as `bash -ic '…'` (zsh: `zsh -ic`). Some
+rc files (Debian's `.bashrc`) return early for non-interactive shells, so the export belongs near
+the top. Without the key, Pi stops with "No API key found for the selected model", followed by a
+long stack trace that can be ignored.
 
 **Check:** `pi --list-models <provider>` lists the model, and
 `pi --no-session -p "Reply with just: ok" </dev/null` prints `ok`.
@@ -178,7 +187,8 @@ common ones.
 
 Then ask the user to start `pi` and confirm, in order:
 
-1. the **GLOBUS HARNESS** header (lab) or their own, with the model and endpoint under it
+1. the **GLOBUS HARNESS** wordmark (lab) or Pi's mark (example) at the top, with the model and
+   endpoint in it
 2. a status column on the right (the terminal must be at least 72 columns wide)
 3. `/endpoints` lists each machine they set up as live (an ALCF model may read `cold`; its first
    request starts it)

@@ -129,3 +129,12 @@ function writeTmp(obj) {
 	writeFileSync(file, JSON.stringify(obj));
 	return file;
 }
+
+test("the example profile's header is the starter design, and reads clean", () => {
+	const file = new URL("../profiles/example/header.json", import.meta.url).pathname;
+	const { config, error } = readHeader(file);
+	assert.equal(error, undefined);
+	const { _comment, ...design } = JSON.parse(readFileSync(file, "utf8"));
+	assert.deepEqual(design, STARTER, "regenerate profiles/example/header.json from STARTER, keeping its _comment");
+	assert.ok(config);
+});
