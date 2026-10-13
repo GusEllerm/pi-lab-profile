@@ -68,11 +68,16 @@ git clone https://github.com/GusEllerm/pi-lab-profile && cd pi-lab-profile
 scripts/install.sh lab        # Globus Labs members; anyone else: scripts/install.sh example
 ```
 
-Then add `"tuiMode": "fullscreen"` to `~/.pi/agent/settings.json`, and — for the lab GPUs — the
-`pi()` launcher from [setup-guide §6](docs/setup-guide.md#6-the-launcher-function), which opens
-the tunnel before Pi starts. Each endpoint needs a credential only you can get; the
+Then add `"tuiMode": "fullscreen"` to `~/.pi/agent/settings.json`. Outside the lab, point Pi at
+your own model — a built-in provider or any OpenAI-compatible server: [providers.md](docs/providers.md).
+In the lab, add the `pi()` launcher from [setup-guide §6](docs/setup-guide.md#6-the-launcher-function),
+which opens the tunnel before Pi starts; each endpoint needs a credential only you can get, and the
 [endpoints page](docs/endpoints.md#getting-access) says which, from whom, and how to check it.
 [agent-setup.md](docs/agent-setup.md) is the same path with every check spelled out.
+
+**No Node.js on the machine?** Build a bundle somewhere that has npm — Pi's standalone binary,
+the harness and its packages with their dependencies in place — and install it with no npm at all:
+[no-node.md](docs/no-node.md).
 
 ### Your first ten minutes
 
@@ -91,6 +96,8 @@ the tunnel before Pi starts. Each endpoint needs a credential only you can get; 
 |---|---|
 | [agent-setup.md](docs/agent-setup.md) | the setup runbook, for a coding agent or a careful human |
 | [setup-guide.md](docs/setup-guide.md) | the long form: the reasoning behind each step, troubleshooting, undo |
+| [providers.md](docs/providers.md) | your own model: a built-in provider or an OpenAI-compatible server |
+| [no-node.md](docs/no-node.md) | installing on a machine without Node.js, from a bundle |
 | [endpoints.md](docs/endpoints.md) | lab GPUs, ALCF, getting access, `/endpoints` |
 | [argo.md](docs/argo.md) | the Argo gateway: the tunnel, Duo, spend |
 | [agents-and-rounds.md](docs/agents-and-rounds.md) | the fleet, attach and steer, `/round` and choosing reviewer models |

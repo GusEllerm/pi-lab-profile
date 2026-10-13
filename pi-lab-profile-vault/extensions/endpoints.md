@@ -1,6 +1,6 @@
 ---
 source: extensions/endpoints.ts
-source-hash: 9e3ec792fb1b20ba6af653d67d8df9f10c6394e1
+source-hash: 152798c542e2fc8c86c74ee9e267395c6f6284a4
 documented: 2026-09-20
 ---
 
@@ -44,7 +44,7 @@ never reads it directly, it asks `ctx.modelRegistry.getApiKeyForProvider(provide
 
 **Which probe runs is decided by host, not by provider name.** If
 `hostOf(models[0].baseUrl) === "inference-api.alcf.anl.gov"` it is `probeAlcf`, otherwise
-`probeGlobus`. Every model of a provider is assumed to share `models[0].baseUrl`.
+`probeServer`. Every model of a provider is assumed to share `models[0].baseUrl`.
 
 **globus — and the tunnel requirement.** The lab's endpoint is deliberately not exposed publicly;
 it is reached by an SSH port-forward to `globus1`, so its `baseUrl` is `http://127.0.0.1:8000/v1`
@@ -106,7 +106,7 @@ their framework reads as `api` and `alcfOffered` finds nothing under it. Those c
 never show "offered, not in models.json" rows — their live/queued/cold state still works, because
 that comes from `jobs`. Only Sophia (`…/sophia/vllm/v1`) matches a real framework key.
 
-**Probes — `getJson`, `probeGlobus`, `probeAlcf`.** Each returns `Row[]`; a `Row` carries an optional
+**Probes — `getJson`, `probeServer`, `probeAlcf`.** (`probeServer` was `probeGlobus` until 13 Oct 2026: it now serves any OpenAI-compatible provider, sends the provider's own key — resolved through `modelRegistry.getApiKeyForProvider` — so a gateway that guards `/models` is not reported down while chat works, and gives the `globus-tunnel ensure` hint only for the `globus` provider; anyone else's unreachable server reads `nothing answers at <baseUrl>`. Found by an outsider-onboarding test. "Unreachable" is the exported `unreachable(why)`, which knows both runtimes' wording: Node's undici says `fetch failed` with the code on `cause`, but Pi's standalone binary — the [no-Node bundle](../../docs/no-node.md) — runs on Bun, whose fetch says `Unable to connect. Is the computer able to access the url?` with `ConnectionRefused` on the error's own `code`; `getJson` appends either. Before that, a bundle install never got the tunnel hint.) Each returns `Row[]`; a `Row` carries an optional
 `model` (selectable) or an optional `note` (an id that exists on the cluster but is not configured).
 
 **The tree — `Section`, `TreeRow`, `summarize`, `treeRows`, `EndpointTree`, the `/endpoints`
@@ -143,7 +143,7 @@ component is driven live by a harness.
 code: everything after the ~8 s `await` in the `/endpoints` handler touches `ctx` unguarded, and is
 survivable only because the host catches a throw inside a *slash-command handler*. A new async path
 outside a command handler would not be. And a URL that lost `/resource_server/` never routed to
-`probeGlobus` — only a host change does that; it now gets the explicit unknown row.
+`probeServer` — only a host change does that; it now gets the explicit unknown row.
 
 ### Argo (23 Sept 2026)
 
@@ -188,7 +188,7 @@ details row says why: metered, and prompts leave through a proxy that may log th
 - `? cold` is only distinguishable from `? unknown` when the `jobs` call succeeded. A gateway that
   answers `list-endpoints` but not `jobs` makes every model read `? listed`.
 - `ALCF_HOST` and the `/resource_server/` marker are hardcoded; an ALCF URL scheme change silently
-  routes those providers to `probeGlobus`, which will report them all as down.
+  routes those providers to `probeServer`, which will report them all as down.
 - `message_end` only tracks the **main session's** assistant messages, so the ✓/✗ says nothing about
   the endpoints subagents are using.
 - `pi.setModel` is given `ctx.modelRegistry.find(...)` with the raw row model as a last-resort

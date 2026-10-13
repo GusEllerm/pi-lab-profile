@@ -18,20 +18,28 @@ follow this one.
    these versions were source-reviewed. If one is gone, stop and ask; do not substitute `latest`.
 3. **No `sudo`, and nothing on any cluster.** Everything here is client-side.
 4. **Credentials are the user's.** Never ask for a password or token to be pasted to you, and never
-   write one into a file. Logins happen in the user's browser or terminal.
+   write one into a file. Logins happen in the user's browser or terminal. Where a config file needs
+   a key, write a reference to an environment variable (`"apiKey": "$MY_API_KEY"`) and ask the
+   user to export it in their shell rc themselves.
 5. **The lab GPU is shared** by the whole lab (eight requests at once in total). Keep test prompts
    tiny and never loop requests against it.
 6. **Headless Pi needs stdin closed:** run `pi -p "…" </dev/null`, or it waits for input. Do not
    start the interactive TUI yourself; ask the user to.
 
-## 0. Ask the user two things
+## 0. Ask the user
 
 - **Are they a Globus Labs member?** Yes → the `lab` profile (the lab's GPU, ALCF, Argo and HPC
   config). No → the `example` profile (their own providers; nothing lab-specific).
-- **Which endpoints do they want now?** Any of: the lab GPUs (needs a cluster account), the ALCF
-  inference gateway (needs ALCF access), Argo (needs a CELS account with Duo and Argo
-  authorisation), HPC through hpc-bridge (needs a facility allocation; the Globus Labs cluster
+- **Lab members — which endpoints do they want now?** Any of: the lab GPUs (needs a cluster
+  account), the ALCF inference gateway (needs ALCF access), Argo (needs a CELS account with Duo and
+  Argo authorisation), HPC through hpc-bridge (needs a facility allocation; the Globus Labs cluster
   needs only an account). None is required; skip the ones they do not have.
+- **Everyone else — which model will they use?** A provider Pi knows (Anthropic, OpenAI, Google,
+  OpenRouter, …: which one, and do they sign in or use an API key?), or an OpenAI-compatible server
+  of their own (vLLM, Ollama, a gateway: its URL, and the name of the environment variable that
+  will hold its key). One model is enough to start; a second, different one makes review rounds
+  worth having.
+- **Is their terminal light or dark?** It picks the theme in step 5.
 
 ## 1. Prerequisites
 
@@ -46,15 +54,22 @@ command -v uv    # only needed for hpc-bridge (and ALCF's one-time login runs th
 nvm is the usual route). If `uv` is missing and they want HPC or ALCF, point them at
 https://docs.astral.sh/uv/ and wait.
 
+**No Node, and it cannot be installed** (an HPC login node, a managed machine)? Then steps 2–4 are
+replaced by a bundle built elsewhere: follow [no-node.md](no-node.md) — the user builds it on a
+machine with npm and copies one file across — and continue here at step 5. Skip `node -v`; the
+rest of the prerequisites still apply.
+
 ## 2. Pi
 
+Check the integrity first, and install only if it matches:
+
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.2.0
 npm view @earendil-works/pi-coding-agent@1.2.0 dist.integrity
 # expect: sha512-h/4WaVWv1VlCaY8x8qEN5U+7jbF/e7+Ck6moPeEOFn5juMTWwNAXjwgYM7gRgbBYh8Zppwt6qWvJDzNTf4GNEQ==
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.2.0
 ```
 
-**Check:** `pi --version` prints `1.2.0`, and the integrity matches.
+**Check:** `pi --version` prints `1.2.0`.
 
 ## 3. The two packages the harness builds on
 
@@ -101,14 +116,32 @@ Merge these keys into `~/.pi/agent/settings.json` (keep everything else in it):
 ```
 
 `tuiMode: "fullscreen"` is required — the status column cannot exist without it. The theme is
-pi-cc's (`cc-dark` for a dark terminal). For the `lab` profile *and* a user with lab GPU access,
-also set `"defaultProvider": "globus"` and `"defaultModel": "qwen3.8-flash-next"`.
+pi-cc's: `cc-light` for a light terminal, `cc-dark` for a dark one (step 0). For the `lab` profile
+*and* a user with lab GPU access, also set `"defaultProvider": "globus"` and
+`"defaultModel": "qwen3.8-flash-next"`.
 
 **Check:** `python3 -m json.tool ~/.pi/agent/settings.json` succeeds, and
 `~/.pi/agent/pi-cc-extensions.json` exists with `"showStartupHeader": false` (step 4 put it there;
 create it from `profiles/<profile>/pi-cc-extensions.json` if it was skipped).
 
-## 6. The launcher (lab profile with lab GPU access only)
+## 6. Their model (example profile only)
+
+Follow [providers.md](providers.md) with the answer from step 0:
+
+- **A built-in provider:** ask the user to run `/login` in Pi, or to export the provider's key
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) in their shell rc. Then set `defaultProvider` and
+  `defaultModel` in `settings.json`.
+- **Their own server:** `curl` its `/v1/models` for the exact model id, write the provider into
+  `~/.pi/agent/models.json` with `"apiKey": "$THEIR_VARIABLE"` (merge if the file exists), set
+  `defaultProvider` and `defaultModel`, and ask the user to export the variable.
+- **Review rounds:** edit `~/.pi/agent/rounds.json` to name models they actually have — ideally
+  two different ones for the panel. With one model, say so: the rounds will still run, with that
+  model reviewing its own work.
+
+**Check:** `pi --list-models <provider>` lists the model, and
+`pi --no-session -p "Reply with just: ok" </dev/null` prints `ok`.
+
+## 7. The launcher (lab profile with lab GPU access only)
 
 Add the `pi()` shell function from [setup-guide.md §6](setup-guide.md#6-the-launcher-function) to
 the user's `~/.zshrc` or `~/.bashrc` (read it first; append, do not replace). It opens the SSH
@@ -118,10 +151,10 @@ off the screen.
 
 **Check:** in a new shell, `type pi` reports a shell function.
 
-## 7. Access — the user's part, one endpoint at a time
+## 8. Access — the user's part, one endpoint at a time (lab profile)
 
-Only for the endpoints chosen in step 0. For each: tell the user what to do, wait for them to say
-it is done, then run the check.
+Only for the endpoints chosen in step 0; the `example` profile skips this step. For each: tell the
+user what to do, wait for them to say it is done, then run the check.
 
 | endpoint | what the user does | check you run |
 |---|---|---|
@@ -130,13 +163,16 @@ it is done, then run the check.
 | **Argo** | Obtain Argo Gateway API authorisation (their division's AIOps representative) and a CELS account with an SSH key and Duo. Then in a terminal: `git clone https://github.com/GusEllerm/argo-tools ~/Projects/argo-tools && cd ~/Projects/argo-tools && ./argo-setup` — it is interactive and asks for a Duo push. | `~/.config/argo-tools/config` exists; `curl -s -m 3 http://127.0.0.1:44497/health` answers `healthy` while their tunnel is up |
 | **HPC (hpc-bridge)** | Nothing in advance: the first time they ask the agent to use a facility, hpc-bridge opens a Globus login in their browser. | `pi mcp list` shows `hpc: connected, 12 tools` (the first run downloads hpc-bridge, so allow a minute) |
 
-## 8. Acceptance
+## 9. Acceptance
 
 ```bash
 cd ~/Projects/pi-lab-profile && bash scripts/check.sh
 ```
 
-**Check:** every extension parses, `lockfile: in sync`, and `boot: clean (pi replied)`. A boot
+**Check:** every extension parses, `lockfile: in sync`, `boot: clean (pi replied)` and the TUI
+line passes. (After a [bundle install](no-node.md) there is no clone and no Node: run
+`bash ~/.local/share/globus-harness/packages/pi-lab-profile/scripts/check.sh`, which skips the
+parse and lockfile steps.) A boot
 failure prints the error; [setup-guide.md §10](setup-guide.md#10-troubleshooting) covers the
 common ones.
 

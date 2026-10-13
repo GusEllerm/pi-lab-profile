@@ -20,7 +20,8 @@ agents/         dev · reviewer · critic — roles with no model pins
 profiles/lab/   the Globus Labs config: models.json, mcp.json, rounds.json, subagents.json,
                 header.json, pi-cc-extensions.json, bin/ (globus-tunnel, alcf-token)
 profiles/example/  the same shape for everyone else, with no lab endpoints
-scripts/        install.sh · check.sh · check-docs.sh · liveness-replay.mjs · make-banner.py
+scripts/        install.sh · check.sh · check-docs.sh · tui-smoke.py · liveness-replay.mjs ·
+                make-banner.py · make-bundle.sh + bundle-install.sh (docs/no-node.md)
 docs/           these pages, the setup guide and runbook, the upstream bug reports
 pi-lab-profile-vault/  the project's memory (below)
 ```
@@ -74,6 +75,10 @@ To see what a newcomer gets, install the published package into a throwaway agen
 PI_CODING_AGENT_DIR=/tmp/pi-clean pi install git:github.com/GusEllerm/pi-lab-profile
 PI_CODING_AGENT_DIR=/tmp/pi-clean pi
 ```
+
+The pinned versions of Pi, pi-cc-extensions and pi-subagents are written in four places — the
+top of `scripts/make-bundle.sh`, the README, `agent-setup.md` and `setup-guide.md` — and
+`tests/versions.test.mjs` fails if they disagree, so an upgrade changes all four.
 
 Upgrading Pi or a package: stage the new version in a scratch prefix and a scratch
 `PI_CODING_AGENT_DIR` first, run the canaries, `check.sh` and a session against it, and only then

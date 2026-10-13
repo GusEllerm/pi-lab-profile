@@ -20,7 +20,13 @@ done
 
 cd "$dir" || { echo "no such directory: $dir" >&2; exit 1; }
 fail=0
+# A bundle install (docs/no-node.md) has Pi but no node or npm: the parse and lockfile steps are
+# for developing the profile, so they are skipped there and the boot and TUI checks still run.
+if ! command -v node >/dev/null; then
+	echo "parse: skipped (no node here — a bundle install; Pi's own runtime loads the extensions)"
+fi
 for f in *.ts; do
+	command -v node >/dev/null || break
 	# jiti resolves the pi packages and TS parameter properties at load time; plain node does
 	# neither, so those two diagnostics are expected and not failures.
 	out=$(node --no-warnings -e "import('./$f').catch(e=>{const m=e.message.split('\n')[0]; if(!/Cannot find package '@earendil-works|MODULE_TYPELESS/.test(m)){console.log('PARSE FAIL: '+m); process.exit(1)}})" 2>&1)
@@ -31,7 +37,7 @@ done
 # 12 Oct 2026: the peer range moved to >=1.1.0 without regenerating the lock, every local check
 # passed (they never run npm ci), and four pushes failed in CI. `npm ci --dry-run` is the same
 # validation, offline-cheap. Fix with: npm install --package-lock-only --ignore-scripts
-if [ "$dir" = "$repo/extensions" ] && [ -f "$repo/package-lock.json" ]; then
+if [ "$dir" = "$repo/extensions" ] && [ -f "$repo/package-lock.json" ] && command -v npm >/dev/null; then
 	if lock=$(cd "$repo" && npm ci --omit=dev --dry-run --ignore-scripts --no-audit --no-fund 2>&1 >/dev/null); then
 		echo "lockfile: in sync with package.json"
 	else
@@ -49,10 +55,12 @@ ALCF_TOKEN_OFFLINE=1 ALCF_TOKEN_TTL=604800 perl -e 'alarm 45; exec @ARGV' pi --n
 status=$?
 # Both halves are required. The first version only looked for known failure strings, so a pi that
 # died on startup -- or was killed by the alarm above -- printed "boot: clean" and was believed.
+# The first line of a failure names its cause ("No API key found for the selected model"); what
+# follows can be a long stack trace from whatever tore down after it, so show the head, not the tail.
 if [ "$status" -ne 0 ]; then
-	echo "BOOT FAIL: pi exited $status$([ "$status" -eq 142 ] && echo ' (killed by the 45s alarm)')"; tail -5 "$log"; fail=1
+	echo "BOOT FAIL: pi exited $status$([ "$status" -eq 142 ] && echo ' (killed by the 45s alarm)')"; grep -v '^\s*$' "$log" | head -3 | cut -c1-240; fail=1
 elif ! grep -qi '^ok' "$log"; then
-	echo "BOOT FAIL: no reply from the model"; tail -5 "$log"; fail=1
+	echo "BOOT FAIL: no reply from the model"; grep -v '^\s*$' "$log" | head -3 | cut -c1-240; fail=1
 elif grep -qiE "Failed to load extension|is not defined|is not a function|ParseError|stale after session" "$log"; then
 	echo "BOOT ERRORS:"; grep -iE "Failed to load|is not defined|is not a function|ParseError|stale after session" "$log" | head -5; fail=1
 else

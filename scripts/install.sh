@@ -35,7 +35,7 @@ case "$profile" in
 		copy "$here/profiles/lab/pi-cc-extensions.json" "$agent_dir/pi-cc-extensions.json"
 		mkdir -p "$HOME/.local/bin"
 		for f in "$here"/profiles/lab/bin/*; do copy "$f" "$HOME/.local/bin/$(basename "$f")"; chmod +x "$HOME/.local/bin/$(basename "$f")" 2>/dev/null || true; done
-		echo "  → needs: an 'ssh globus1' host alias, 'uvx alcf-ai auth login' once, uv on PATH for the hpc-bridge MCP server,"
+		echo "  → needs: an 'ssh globus1' host alias, 'uvx --from \"alcf-ai==0.10.0\" alcf-ai auth login' once, uv on PATH for the hpc-bridge MCP server,"
 		echo "           and argo-tools (github.com/GusEllerm/argo-tools, ./argo-setup) for Argo — see docs/endpoints.md"
 		;;
 	example)
@@ -49,7 +49,12 @@ case "$profile" in
 	*) echo "Unknown profile: $profile (expected 'lab' or 'example')" >&2; exit 2 ;;
 esac
 
-echo
-echo "Extensions come from the package itself:  pi install git:github.com/GusEllerm/pi-lab-profile"
-echo "If you previously copied these .ts files into $agent_dir/extensions, delete them — otherwise"
-echo "they load twice and you get two status bars."
+# A bundle install (docs/no-node.md) has already installed the package from a local directory.
+if [ -z "${GLOBUS_HARNESS_BUNDLE:-}" ]; then
+	echo
+	echo "Extensions come from the package itself:  pi install git:github.com/GusEllerm/pi-lab-profile"
+fi
+if ls "$agent_dir"/extensions/*.ts >/dev/null 2>&1; then
+	echo "  ! $agent_dir/extensions has .ts files; if they are copies of this harness's, delete them —"
+	echo "    otherwise they load twice and you get two status bars."
+fi

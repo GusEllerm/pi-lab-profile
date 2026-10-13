@@ -77,9 +77,11 @@ async function getJson(url: string, headers: Record<string, string> = {}): Promi
 	} catch (e) {
 		// undici reports "fetch failed" and puts the real reason (ECONNREFUSED, ENOTFOUND, a cert
 		// error) on `cause`; a timeout arrives as a bare abort. Neither helps anyone as printed.
-		const err = e as { name?: string; message?: string; cause?: { code?: string; message?: string } };
+		// Pi's standalone binary runs on Bun, whose fetch says "Unable to connect…" and puts the
+		// reason (ConnectionRefused) on the error's own `code`.
+		const err = e as { name?: string; message?: string; code?: string; cause?: { code?: string; message?: string } };
 		if (err?.name === "TimeoutError" || err?.name === "AbortError") throw new Error(`no answer in ${PROBE_TIMEOUT_MS / 1000}s`);
-		const cause = err?.cause?.code ?? err?.cause?.message;
+		const cause = err?.cause?.code ?? err?.cause?.message ?? err?.code;
 		throw new Error(cause ? `${err?.message ?? "fetch failed"} (${cause})` : (err?.message ?? String(e)));
 	}
 	if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 120)}`);
@@ -138,10 +140,28 @@ function alcfJobStates(jobs: unknown): Map<string, "live" | "queued"> {
 	return states;
 }
 
-async function probeGlobus(models: AnyModel[]): Promise<Row[]> {
+/** Whether a probe's error means nothing is listening, under Node's fetch (undici) or Bun's. */
+export function unreachable(why: string): boolean {
+	return /fetch failed|ECONNREFUSED|ENOTFOUND|Unable to connect|ConnectionRefused|FailedToOpenSocket|no answer in/i.test(why);
+}
+
+/**
+ * Any OpenAI-compatible server: the lab GPU behind its tunnel, or a user's own (docs/providers.md).
+ * It is asked for /models with the provider's own key when there is one -- a hosted gateway that
+ * guards /models would otherwise read "down" while chat works -- and the tunnel hint is given only
+ * for the lab's `globus` provider, the one endpoint that sits behind globus-tunnel.
+ */
+async function probeServer(ctx: ExtensionContext, provider: string, models: AnyModel[]): Promise<Row[]> {
 	const base = models[0].baseUrl.replace(/\/$/, "");
+	let headers: Record<string, string> = {};
 	try {
-		const body = (await getJson(`${base}/models`)) as { data?: { id: string }[] };
+		const key = await ctx.modelRegistry.getApiKeyForProvider(provider);
+		if (key) headers = { Authorization: `Bearer ${key}` };
+	} catch {
+		// no key to send: probe without one
+	}
+	try {
+		const body = (await getJson(`${base}/models`, headers)) as { data?: { id: string }[] };
 		const served = new Set((body.data ?? []).map((m) => m.id));
 		const rows: Row[] = models.map((m) => ({
 			model: m,
@@ -153,7 +173,7 @@ async function probeGlobus(models: AnyModel[]): Promise<Row[]> {
 		return rows;
 	} catch (e) {
 		const why = String((e as Error).message ?? e);
-		const hint = /fetch failed|ECONNREFUSED|ENOTFOUND|no answer in/i.test(why) ? `tunnel down — run: globus-tunnel ensure (${why})` : why;
+		const hint = unreachable(why) && provider === "globus" ? `tunnel down — run: globus-tunnel ensure (${why})` : unreachable(why) ? `nothing answers at ${base} (${why})` : why;
 		return models.map((m) => ({ model: m, label: `? down    ${m.id}  (${hint})` }));
 	}
 }
@@ -493,7 +513,7 @@ export default function (pi: ExtensionAPI): void {
 					? probeArgo(models, argoModels)
 					: hostOf(models[0].baseUrl) === ALCF_HOST
 						? probeAlcf(ctx, provider, models)
-						: probeGlobus(models);
+						: probeServer(ctx, provider, models);
 				void probe
 					.catch((e): Row[] => [{ label: `  probe failed: ${e instanceof Error ? e.message : String(e)}` }])
 					.then((rows) => {

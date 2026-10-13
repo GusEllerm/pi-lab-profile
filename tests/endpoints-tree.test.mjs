@@ -2,7 +2,7 @@
 // are pure, so they are tested directly; the component around them is driven live by the harness.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { summarize, treeRows } from "../extensions/endpoints.ts";
+import { summarize, treeRows, unreachable } from "../extensions/endpoints.ts";
 
 const globus = { provider: "globus", label: "globus cluster", baseUrl: "http://127.0.0.1:8000/v1", rows: [
 	{ label: "● up      qwen3.8-flash-next", model: { id: "qwen3.8-flash-next", provider: "globus", baseUrl: "http://127.0.0.1:8000/v1" } },
@@ -47,4 +47,16 @@ test("an open folder whose probe has not landed shows its URL and nothing else y
 	argo.rows = [{ label: "● up      claude-opus-5  (55 ids · 38 models · metered)", model: { id: "claude-opus-5", provider: "argo", baseUrl: "x" } }];
 	assert.deepEqual(treeRows([argo], new Set(["argo"])).map((r) => r.kind), ["folder", "url", "model"], "the same section object fills in as the probe resolves");
 	assert.equal(summarize(argo.rows), "1 up");
+});
+
+test("a probe that reached nothing is recognised under Node's fetch and Bun's", () => {
+	// Node (undici): getJson appends the cause's code
+	assert.ok(unreachable("fetch failed (ECONNREFUSED)"));
+	assert.ok(unreachable("fetch failed (ENOTFOUND)"));
+	// Bun, which Pi's standalone binary runs on (docs/no-node.md): seen on 13 Oct 2026
+	assert.ok(unreachable("Unable to connect. Is the computer able to access the url? (ConnectionRefused)"));
+	assert.ok(unreachable("no answer in 8s"));
+	// a server that answered, badly, is not "nothing answers"
+	assert.ok(!unreachable("HTTP 401 bad key"));
+	assert.ok(!unreachable("HTTP 502 Bad Gateway"));
 });

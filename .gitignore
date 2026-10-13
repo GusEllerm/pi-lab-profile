@@ -4,3 +4,4 @@ node_modules/
 
 # Obsidian's own state is per machine; the notes are what is versioned
 pi-lab-profile-vault/.obsidian/
+dist/
