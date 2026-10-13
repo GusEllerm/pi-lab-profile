@@ -25,7 +25,8 @@ fail=0
 if ! command -v node >/dev/null; then
 	echo "parse: skipped (no node here — a bundle install; Pi's own runtime loads the extensions)"
 fi
-for f in *.ts; do
+for f in *.ts lib/*.ts; do
+	[ -e "$f" ] || continue
 	command -v node >/dev/null || break
 	# jiti resolves the pi packages and TS parameter properties at load time; plain node does
 	# neither, so those two diagnostics are expected and not failures.

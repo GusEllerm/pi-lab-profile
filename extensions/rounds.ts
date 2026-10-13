@@ -20,9 +20,9 @@
  * it without re-reading the whole transcript.
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { agentDir, readJson } from "./lib/paths.ts";
 
 type SpawnReply = { id?: string; error?: string };
 type AgentOutcome = { status?: string; result?: string; error?: string; durationMs?: number; tokens?: { total?: number } };
@@ -55,13 +55,9 @@ const DEFAULTS: Required<Pick<RoundsConfig, "panel" | "timeoutMinutes">> = {
 };
 
 function readConfig(cwd: string): RoundsConfig {
-	for (const file of [join(cwd, ".pi", "rounds.json"), join(homedir(), ".pi", "agent", "rounds.json")]) {
-		try {
-			const parsed = JSON.parse(readFileSync(file, "utf8")) as RoundsConfig;
-			if (parsed && typeof parsed === "object") return parsed;
-		} catch {
-			// missing is normal; malformed should not take the command down with it
-		}
+	for (const file of [join(cwd, ".pi", "rounds.json"), join(agentDir(), "rounds.json")]) {
+		const parsed = readJson<RoundsConfig>(file);
+		if (parsed) return parsed;
 	}
 	return {};
 }

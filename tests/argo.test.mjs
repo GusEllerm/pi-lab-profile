@@ -143,6 +143,18 @@ test("message_end: an Argo Claude turn with zeroed input comes back estimated; o
 		assert.equal(hook({ message: { ...turn, provider: "argo-openai" } }, ctx), undefined, "the OpenAI path reports usage itself");
 		assert.equal(hook({ message: { ...turn, stopReason: "error" } }, ctx), undefined);
 		assert.equal(hook({ message: { ...turn, usage: { ...turn.usage, input: 900 } } }, ctx), undefined, "a real count is kept");
+		// After a compaction the branch still holds everything that was summarised away; the
+		// request carried only the projection. Estimating over the branch made every later turn
+		// compact again (13 Oct 2026 review).
+		const compacted = {
+			sessionManager: {
+				getBranch: () => Array.from({ length: 50 }, (_, i) => ({ type: "message", message: { role: "user", content: "q".repeat(4000), timestamp: i } })),
+				buildSessionProjection: () => ({ messages: [{ role: "user", content: "summary".repeat(100), timestamp: 60 }] }),
+			},
+			getSystemPrompt: () => "",
+		};
+		const after = hook({ message: { ...turn, timestamp: 61 } }, compacted);
+		assert.equal(after.message.usage.input, 175, "the projection (700 chars), not the 50-message branch");
 		handlers.get("session_shutdown")?.();
 	} finally {
 		rmSync(process.env.HOME, { recursive: true, force: true });

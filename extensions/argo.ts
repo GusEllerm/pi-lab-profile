@@ -630,13 +630,24 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		}
 		if (m.provider !== "argo" || !m.usage) return undefined;
 		if (m.stopReason === "error" || m.stopReason === "aborted") return undefined;
-		const entries = ctx.sessionManager.getBranch() as { type?: string; message?: Msg }[];
+		// What the request carried is the compaction-resolved context, not the whole branch:
+		// getBranch() keeps every message a compaction summarised away, so after the first
+		// auto-compaction a branch-wide estimate reads as the full history, Pi's threshold check
+		// takes a message's usage at face value (no post-compaction guard on that path), and every
+		// Argo turn compacted again -- a metered call each time. Found in the 13 Oct 2026 review.
+		const sm = ctx.sessionManager as { buildSessionProjection?: () => { messages?: Msg[] }; getBranch: () => { type?: string; message?: Msg }[] };
+		let context: Msg[];
+		try {
+			context = sm.buildSessionProjection?.().messages ?? [];
+		} catch {
+			context = [];
+		}
+		if (!context.length) context = sm.getBranch().flatMap((e) => (e.type === "message" && e.message ? [e.message] : []));
 		const prior: Msg[] = [];
-		for (const e of entries) {
-			if (e.type !== "message" || !e.message) continue;
-			// the branch may or may not already hold this message; either way it is output, not input
-			if (e.message === (m as Msg) || (e.message.role === "assistant" && (e.message.timestamp ?? 0) >= (m.timestamp ?? 0))) continue;
-			prior.push(e.message);
+		for (const msg of context) {
+			// the context may or may not already hold this message; either way it is output, not input
+			if (msg === (m as Msg) || (msg.role === "assistant" && (msg.timestamp ?? 0) >= (m.timestamp ?? 0))) continue;
+			prior.push(msg);
 		}
 		let system = "";
 		try {

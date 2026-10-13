@@ -23,9 +23,9 @@
  * Nothing is ever aborted from here; a stuck agent is the user's call.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { agentDir } from "./lib/paths.ts";
 
 // ── timings: what each wait usually takes ────────────────────────────────────────────────────
 export type Quantiles = { p95: number; p99: number };
@@ -324,8 +324,7 @@ export const TICK_MS = 2000;
 
 export default function (pi: ExtensionAPI): void {
 	let dead = false;
-	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-	const file = join(agentDir, "cache", "liveness.json");
+	const file = join(agentDir(), "cache", "liveness.json");
 	let saved: Record<string, number[]> | undefined;
 	try {
 		if (existsSync(file)) saved = JSON.parse(readFileSync(file, "utf8")) as Record<string, number[]>;

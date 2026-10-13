@@ -34,6 +34,7 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { agentDir } from "./lib/paths.ts";
 
 export type HeaderConfig = {
 	art?: string[];
@@ -48,8 +49,6 @@ export type HeaderConfig = {
 };
 export type Values = Record<string, string>;
 type Style = { fg(name: string, text: string): string; bold(text: string): string; italic?(text: string): string };
-
-const agentDir = () => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 
 /** The project's header file if it has one, else the user's; undefined when neither exists. */
 export function headerPath(cwd: string, dir = agentDir()): string | undefined {

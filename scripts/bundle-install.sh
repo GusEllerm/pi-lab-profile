@@ -53,13 +53,14 @@ done
 echo
 GLOBUS_HARNESS_BUNDLE=1 "$dest/packages/pi-lab-profile/scripts/install.sh" "$profile"
 
-# The column cannot exist without fullscreen mode; add the key only if it is missing.
-settings="$HOME/.pi/agent/settings.json"
+# The column cannot exist without fullscreen mode; add the key only if it is missing. Pi and the
+# profile's installer both honour PI_CODING_AGENT_DIR, so this must too.
+settings="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/settings.json"
 if command -v python3 >/dev/null; then
 	python3 - "$settings" <<'EOF'
-import json, sys
+import json, os, sys
 p = sys.argv[1]
-s = json.load(open(p))
+s = json.load(open(p)) if os.path.exists(p) else {}
 if "tuiMode" not in s:
     s["tuiMode"] = "fullscreen"
     json.dump(s, open(p, "w"), indent=2)

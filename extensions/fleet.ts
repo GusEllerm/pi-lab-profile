@@ -23,9 +23,9 @@
  * in ~/.pi/agent/subagents.json.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { agentDir, readJson } from "./lib/paths.ts";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, isKeyRelease, Markdown, matchesKey, ScrollView, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
@@ -226,15 +226,8 @@ function wrap(text: string, width: number): string[] {
  * ~/.pi/agent/subagents.json — so a project can silently switch them back on.
  */
 function subagentSurfaces(cwd: string): { on: boolean; projectFile: string } {
-	const read = (file: string) => {
-		try {
-			return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-		} catch {
-			return {};
-		}
-	};
 	const projectFile = join(cwd, ".pi", "subagents.json");
-	const merged = { ...read(join(homedir(), ".pi", "agent", "subagents.json")), ...read(projectFile) };
+	const merged = { ...readJson(join(agentDir(), "subagents.json")), ...readJson(projectFile) };
 	return { on: merged.widgetMode !== "off" || merged.fleetView !== false, projectFile };
 }
 

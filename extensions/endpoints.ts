@@ -18,8 +18,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { agentDir } from "./lib/paths.ts";
 
-const MODELS_JSON = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "models.json");
+const modelsJson = () => join(agentDir(), "models.json");
 const ALCF_HOST = "inference-api.alcf.anl.gov";
 const isArgo = (m: { provider: string }) => m.provider === "argo" || m.provider === "argo-openai";
 const ALCF_TOKEN_ERROR = join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "alcf-token", "last-error");
@@ -30,7 +31,7 @@ type Row = { label: string; model?: AnyModel; note?: string };
 
 function customProviderIds(): string[] {
 	try {
-		return Object.keys(JSON.parse(readFileSync(MODELS_JSON, "utf8")).providers ?? {});
+		return Object.keys(JSON.parse(readFileSync(modelsJson(), "utf8")).providers ?? {});
 	} catch {
 		return [];
 	}
