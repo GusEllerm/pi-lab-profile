@@ -415,7 +415,10 @@ while exited is None:
         except OSError:
             data = b""
         if not data:
-            exited = 1
+            # The slave side closed. On Linux the hangup can discard output still buffered in the
+            # master -- the marker line included (seen in CI, 13 Oct 2026) -- so the wrapper's own
+            # exit status, which carries the command's code, is the truth here, not a guess of 1.
+            exited = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
             break
         pending += data
         # complete lines: the marker is swallowed, everything else is forwarded as it is
