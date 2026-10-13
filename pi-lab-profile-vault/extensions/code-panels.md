@@ -1,6 +1,6 @@
 ---
 source: extensions/code-panels.ts
-source-hash: 2f84d3bcb30c0aaf6779d4bd4650c47c8d01540c
+source-hash: 245e55eb3ccbadb794aa37b52a36aeb41c3eec90
 documented: 2026-09-20
 ---
 

@@ -17,7 +17,8 @@ extensions/
   code-panels   code blocks without fences
   image-window  /images
   lib/          what more than one extension needs: bus (the event names and payload types),
-                lifecycle (the shutdown guard), paths (the agent dir, reading JSON)
+                lifecycle (the shutdown guard), metrics (usage, speed, the context trail),
+                paths (the agent dir, reading JSON)
 agents/         dev · reviewer · critic — roles with no model pins
 profiles/lab/   the Globus Labs config: models.json, mcp.json, rounds.json, subagents.json,
                 header.json, pi-cc-extensions.json, bin/ (globus-tunnel, alcf-token)

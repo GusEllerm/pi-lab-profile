@@ -1,5 +1,5 @@
 {
-  "_comment": "The startup header (extensions/header.ts): Pi's mark, the model and the endpoint. Edit, then /header reload. Styles: {accent:…} {muted:…} {dim:…} {bold:…} {#rrggbb:…} or any theme colour; values: {version} {model} {endpoint} {thinking} {cwd} {branch} {user} {host} {date} {hints}. A project's .pi/header.json overrides this one; profiles/lab/header.json is a fuller example.",
+  "_comment": "The startup header (extensions/header.ts): Pi's mark, the model and the endpoint. Edit, then /header reload. Styles: {accent:…} {muted:…} {dim:…} {bold:…} {#rrggbb:…} or any theme colour; values: {version} {model} {endpoint} {thinking} {cwd} {branch} {user} {host} {date} {hints}. Optional: gap (columns between the art and the text, default 2), layout: stacked. A project's .pi/header.json overrides this one; profiles/lab/header.json is a fuller example.",
   "art": [
     "██████  ",
     "██  ██  ",

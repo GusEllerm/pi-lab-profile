@@ -262,7 +262,7 @@ pane renders from; the column ignores the extra field.
 
 - [[statusbar]] — owns the footer, sidebar, `/status` dashboard and the transcript layout; consumes
   `statusbar:slot`, `statusbar:transcript` and `statusbar:attached`.
-- [[endpoints]] — emits `statusbar:endpoint-labels`.
+- [[endpoints]] — emits `statusbar:endpoint-labels`; supplies the human labels behind the `↗` mark.
 - [[rounds]] — another publisher on the `statusbar:slot` protocol.
 - [[../architecture/pi-internals]] — the Pi-internal surfaces this profile relies on
   (`Symbol.for("pi-subagents:manager")`, `setLayoutRoot`, widget placement, `onTerminalInput`).

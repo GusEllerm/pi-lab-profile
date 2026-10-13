@@ -127,7 +127,13 @@ test("message_end: an Argo Claude turn with zeroed input comes back estimated; o
 	const savedHome = process.env.HOME;
 	process.env.HOME = mkdtempSync(join(tmpdir(), "argo-nohome-"));
 	try {
-		await argo(pi);
+		const savedPath = process.env.PATH;
+		process.env.PATH = "/nonexistent"; // the factory looks for argo-dash on PATH; a host with argo-tools must not change the test
+		try {
+			await argo(pi);
+		} finally {
+			process.env.PATH = savedPath;
+		}
 		const hook = handlers.get("message_end");
 		assert.ok(hook, "argo.ts hooks message_end");
 		const ctx = {
@@ -313,7 +319,13 @@ test("startup registers both providers from a live catalogue, and none when the 
 			on: (e, h) => { handlers.set(e, h); return () => {}; },
 			events: { on: () => () => {}, emit: () => {} },
 		};
-		await argo(pi);
+		const savedPath = process.env.PATH;
+		process.env.PATH = "/nonexistent"; // the factory looks for argo-dash on PATH; a host with argo-tools must not change the test
+		try {
+			await argo(pi);
+		} finally {
+			process.env.PATH = savedPath;
+		}
 		assert.deepEqual([...registered.keys()].sort(), ["argo", "argo-openai"]);
 		assert.deepEqual(registered.get("argo").models.map((m) => m.id), ["claude-opus-5"], "aliases folded, embeddings dropped");
 		assert.deepEqual(registered.get("argo-openai").models.map((m) => m.id), ["gpt-4o"]);

@@ -1,32 +1,9 @@
 // The context trajectory is arithmetic over a ring of samples, so it is tested directly rather than
-// by growing a real session to 90% of its window. Same source-slicing trick as paint-diff.test.mjs:
-// take the class out of the extension and strip the TS annotations so plain node can run it.
+// by growing a real session to 90% of its window. (Until 13 Oct 2026 this sliced the class out of
+// statusbar.ts between two comment markers; it lives in lib/metrics.ts now and is imported.)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "extensions", "statusbar.ts"), "utf8");
-// Markers and every TS strip are asserted: a moved marker or a changed signature used to surface
-// as a bare SyntaxError from new Function, with no mention of what had moved.
-const slice = (start, end) => {
-	const a = src.indexOf(start);
-	const b = src.indexOf(end, a + 1);
-	assert.ok(a !== -1, `marker not found in statusbar.ts: ${start}`);
-	assert.ok(b !== -1, `marker not found in statusbar.ts after ${start}: ${end}`);
-	return src.slice(a, b);
-};
-const strip = (text, from, to) => {
-	assert.ok(text.includes(from), `ContextTrail changed; update this test's strip (looked for: ${from})`);
-	return text.replace(from, to);
-};
-let body = slice("const SPARK =", "/** Read-only overlay:");
-body = strip(body, "private samples: { at: number; used: number }[] = [];", "samples = [];");
-body = strip(body, "sample(used: number): void", "sample(used)");
-body = strip(body, "rate(): number | undefined", "rate()");
-body = strip(body, "spark(width: number): string", "spark(width)");
-const ContextTrail = new Function(`${body}; return ContextTrail;`)();
+import { ContextTrail } from "../extensions/lib/metrics.ts";
 
 /** Samples are rate-limited to ~1s, so drive the clock rather than the sampler. */
 const seed = (points) => {

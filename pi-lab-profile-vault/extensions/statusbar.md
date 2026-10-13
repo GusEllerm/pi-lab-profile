@@ -1,6 +1,6 @@
 ---
 source: extensions/statusbar.ts
-source-hash: 3f7c03f7f98bb4bbffaf358078223c53f25536f2
+source-hash: 1abb7c5a442172dd03da44bf6336c6e724e88609
 documented: 2026-09-20
 ---
 
@@ -322,7 +322,7 @@ resize then ran a forced full repaint per reload ever done. `scheduleResizeSettl
 
 ### 13 Oct 2026 review: shared protocol and guard
 
-`Slot`, `AttachedStats` and `SlotState` now live in `extensions/lib/bus.ts` with every other event's payload type (statusbar re-exports them); nothing had imported them from here, and hpc-bridge had grown its own `SlotState` without `"plain"`. The `dead` flag and `alive(ctx)` are `lib/lifecycle.ts` (`const life = lifecycle(pi)`; `alive` still means "has a UI"), and the endpoint-label map comes from `bus.endpointLabels(pi, onChange)` -- the same handler had three copies. The memo key no longer calls `getContextUsage()` per frame (it re-projects the whole session each call -- the Intl.Segmenter mistake again); `contextUsage` is read on session start, turn/agent end, model select and `session_compact`, and the key and footer use that. The column body still reads it live, once per key change.
+`Slot`, `AttachedStats` and `SlotState` now live in `extensions/lib/bus.ts` with every other event's payload type (statusbar re-exports them); nothing had imported them from here, and hpc-bridge had grown its own `SlotState` without `"plain"`. The `dead` flag and `alive(ctx)` are `lib/lifecycle.ts` (`const life = lifecycle(pi)`; `alive` still means "has a UI"), and the endpoint-label map comes from `bus.endpointLabels(pi, onChange)` -- the same handler had three copies. The memo key no longer calls `getContextUsage()` per frame (it re-projects the whole session each call -- the Intl.Segmenter mistake again); `contextUsage` is read on session start, turn/agent end, model select and `session_compact`, and the key and footer use that. The column body still reads it live, once per key change. `Usage`/`sumUsage`, `Speed`/`SpeedMeter`/`speedText` and `ContextTrail` moved to `extensions/lib/metrics.ts` (pure; `tests/context-trail.test.mjs` imports the class instead of slicing this file between two comment markers, and `tests/metrics.test.mjs` covers the rest). Still in here and extractable with clean seams, per the review: the three upstream workarounds plus `/prof` (→ `lib/compat.ts`) and the layout mounting (→ `lib/layout.ts`); `tests/hover-guard.test.mjs` still slices the source for `guardHover`.
 
 ## Invariants a future change must not break
 

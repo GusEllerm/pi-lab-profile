@@ -12,6 +12,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
 profile="${1:-}"
+case "$profile" in lab|example|"") ;; *) echo "Unknown profile: $profile (expected 'lab' or 'example')" >&2; exit 2 ;; esac
 
 copy() { # copy <src> <dest>
 	if [ -e "$2" ]; then
@@ -47,7 +48,6 @@ case "$profile" in
 		echo "  → edit $agent_dir/rounds.json to name models you actually have"
 		;;
 	"") echo "No profile requested; roles only. Pass 'lab' or 'example' for endpoint config." ;;
-	*) echo "Unknown profile: $profile (expected 'lab' or 'example')" >&2; exit 2 ;;
 esac
 
 # A bundle install (docs/no-node.md) has already installed the package from a local directory.

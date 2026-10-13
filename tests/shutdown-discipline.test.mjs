@@ -67,6 +67,9 @@ test("every extension that registers a process listener also removes it", () => 
 		for (const [, stream, event] of ons) {
 			assert.match(src, new RegExp(`process\\.${stream}\\.off\\("${event}"`), `${name}: process.${stream}.on("${event}") has no matching off()`);
 		}
+		for (const [, event] of src.matchAll(/process\.(?:on|addListener)\("([A-Za-z]+)"/g)) {
+			assert.match(src, new RegExp(`process\\.(?:off|removeListener)\\("${event}"`), `${name}: process.on("${event}") has no matching off()`);
+		}
 		if (/setInterval\(/.test(src)) assert.match(src, /clearInterval\(/, `${name}: setInterval without clearInterval`);
 	}
 });

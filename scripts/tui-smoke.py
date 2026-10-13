@@ -51,7 +51,14 @@ if alive:
         time.sleep(0.3)
     try:
         os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+        deadline = time.time() + 2
+        while time.time() < deadline and os.waitpid(pid, os.WNOHANG)[0] == 0:
+            time.sleep(0.05)
+        else:
+            if time.time() >= deadline:  # a Pi that ignores SIGTERM would otherwise linger on the pty
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+    except (ProcessLookupError, ChildProcessError):
         pass
 
 if not alive or error:

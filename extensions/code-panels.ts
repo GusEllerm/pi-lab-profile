@@ -16,7 +16,7 @@
  */
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { highlightCode } from "@earendil-works/pi-coding-agent";
-import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 // Tweak here. Backgrounds: selectedBg | userMessageBg | customMessageBg | toolPendingBg | toolSuccessBg
 const PANEL_BG = "toolPendingBg" as const;
@@ -39,7 +39,8 @@ function renderPanel(token: { text: string; lang?: string }, width: number, them
 
 	const lang = (token.lang ?? "").trim().split(/\s+/)[0] ?? "";
 	const lines: string[] = [];
-	lines.push(fill(SHOW_LANGUAGE_LABEL && lang ? theme.fg("mdCodeBlockBorder", `${INSET}${lang}`) : ""));
+	// the info string is whatever followed the fence; a 200-character one must not widen the row
+	lines.push(fill(SHOW_LANGUAGE_LABEL && lang ? theme.fg("mdCodeBlockBorder", `${INSET}${truncateToWidth(lang, Math.max(1, width - INSET.length), "…")}`) : ""));
 
 	const inner = Math.max(1, width - INSET.length * 2);
 	for (const codeLine of highlightCode(token.text, lang || undefined)) {

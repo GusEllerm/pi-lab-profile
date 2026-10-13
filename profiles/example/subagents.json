@@ -1,5 +1,5 @@
 {
-  "_comment": "The harness replaces pi-subagents' widget and list with its own fleet; with these on, both draw.",
+  "_comment": "The harness replaces pi-subagents' widget and list with its own fleet; with these on, both draw. pi-subagents' own keys (maxConcurrent, maxConcurrentForeground, workflowsEnabled -- see profiles/lab/subagents.json) are optional.",
   "widgetMode": "off",
   "fleetView": false
 }
